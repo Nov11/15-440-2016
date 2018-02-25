@@ -8,48 +8,91 @@ import (
 	"fmt"
 	"bufio"
 	"strings"
+	"strconv"
 )
 
 type keyValueServer struct {
 	port    int
 	close   chan int
 	clients chan int
+	kvPut   chan string
+	kvGet   chan string
 }
 
 // New creates and returns (but does not start) a new KeyValueServer.
 func New() KeyValueServer {
-	return &keyValueServer{clients: make(chan int), close: make(chan int)}
+	return &keyValueServer{clients: make(chan int), close: make(chan int), kvPut: make(chan string), kvGet: make(chan string)}
 }
 
 func (kvs *keyValueServer) Start(port int) error {
 	kvs.port = port
-	listener, err := net.Listen("tcp", ":"+string(port))
+	tmp := ":" + strconv.Itoa(port)
+	listener, err := net.Listen("tcp", tmp)
 	if err != nil {
 		return err
 	}
 	go func(acceptor net.Listener) {
 		defer acceptor.Close()
-		clientSet := make(map[net.Conn]chan int)
+		clientSet := make(map[net.Conn]chan string)
+		exitChan := make(chan net.Conn)
+		connected := make(chan net.Conn)
+		go func(acceptor net.Listener) {
+			for {
+				conn, err := acceptor.Accept()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Accept connection error: %s", err.Error())
+				} else {
+					connected <- conn
+				}
+			}
+
+		}(acceptor)
 		for {
 			select {
 			case <-kvs.close:
 				//shutdown children
 				for _, v := range clientSet {
-					v <- 1
-					<-v
+					select {
+					case v <- "close":
+					default:
+					}
 				}
-			case conn, err := acceptor.Accept():
-				if err != nil {
-					fmt.Fprint(os.Stderr, "Accept connection error: %s", err.Error())
-				} else {
-					clientSet[conn] = make(chan int)
-					go
-				}
+				return
+			case conn := <-connected:
+				clientSet[conn] = make(chan string)
+				go worker(conn, clientSet[conn], kvs.kvPut, kvs.kvGet, exitChan)
+
 			case <-kvs.clients:
 				kvs.clients <- len(clientSet)
+			case c := <-exitChan:
+				delete(clientSet, c)
 			}
 		}
 	}(listener)
+
+	go func(putMsg chan string, getMsg chan string) {
+		init_db()
+		for {
+			select {
+			case k := <-getMsg:
+				v := get(k)
+				sv := string(v)
+				ret := k + "," +sv
+
+				if len(ret) == len(k){
+					fmt.Printf("%v", kvstore)
+				}
+				fmt.Printf("get k: %v v :%v ret : %v\n", k, v, ret)
+				getMsg <- ret
+			case msg := <-putMsg:
+				cmds := strings.Split(msg, ",")
+				k := cmds[0]
+				v := cmds[1]
+				put(k, []byte(v))
+				fmt.Printf("put k: %v v :%v\n", k, string(get(k)))
+			}
+		}
+	}(kvs.kvPut, kvs.kvGet)
 	return nil
 }
 
@@ -69,32 +112,52 @@ func checkError(err error) {
 	}
 }
 
-type ringbuffer struct{
-	buffer []string
-}
-func worker(conn net.Conn, msgChannel chan string) {
-	defer func() { msgChannel <- "" }()
+func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan string, exitChan chan net.Conn) {
 	defer conn.Close()
-	rb := ringbuffer{buffer:make([]string, 0)}
+	defer func() { exitChan <- conn }()
+	rb := make(chan string, 500)
 	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+	line := make(chan string)
+	go func(reader *bufio.ReadWriter) {
+		for {
+			msg, _, err := rw.ReadLine()
+
+			line <- string(msg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s", err.Error())
+				return
+			}
+		}
+	}(rw)
 	for {
 		select {
 		case msg := <-msgChannel:
-			if msg == ""{
+			if msg == "close" {
 				return
 			}
-			rw.WriteString(msg)
-		case line, _, err := rw.ReadLine():
-			if err != nil{
+			rb <- msg
+		case v := <-rb:
+			fmt.Printf("worker write out :%v", v)
+			rw.WriteString(v)
+		case msg := <-line:
+			if msg == "" {
 				return
 			}
-			msg := string(line)
 			cmds := strings.Split(msg, ",")
-			switch cmds[0]{
-			case "put":
-			case "get":
+			switch {
+			case cmds[0] == "put":
+				kvPut <- cmds[1]+","+cmds[2]
+			case cmds[0] == "get":
+				kvGet <- cmds[1]
+				out := <-kvGet
+				fmt.Printf("reply get: [%v]\n", out)
+				out = out + "\n"
+				_, writeErr := rw.Write([]byte(out))
+				rw.Flush()
+				if writeErr != nil {
+					return
+				}
 			}
 		}
 	}
-
 }
