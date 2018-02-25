@@ -235,7 +235,7 @@ func (ts *testSystem) runTest(numMsgs, timeout int, normalClients, slowClients [
 
             if v, ok := keyValueTrackMap[msg]; !ok {
                 // Abort! Client received a message that was never sent.
-                return fmt.Errorf("client read unexpected message: %s \n%r", msg, keyValueTrackMap)
+                return fmt.Errorf("client read unexpected message: %s \n %v", msg, keyValueTrackMap)
             } else if v > 1 {
                 // We expect the message to be read v - 1 more times.
                 keyValueTrackMap[msg] = v - 1

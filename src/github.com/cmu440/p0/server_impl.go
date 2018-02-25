@@ -22,7 +22,7 @@ type keyValueServer struct {
 
 // New creates and returns (but does not start) a new KeyValueServer.
 func New() KeyValueServer {
-	return &keyValueServer{clients: make(chan int)		, close: make(chan int)		, kvPut: make(chan string)		, kvGet: make(chan string), broadcast: make(chan string)}
+	return &keyValueServer{clients: make(chan int), close: make(chan int), kvPut: make(chan string), kvGet: make(chan string), broadcast: make(chan string, 100)}
 }
 
 func (kvs *keyValueServer) Start(port int) error {
@@ -33,11 +33,12 @@ func (kvs *keyValueServer) Start(port int) error {
 		return err
 	}
 	go func(acceptor net.Listener) {
-
+		fmt.Println("main starter")
 		clientSet := make(map[net.Conn]chan string)
 		exitChan := make(chan net.Conn)
 		connected := make(chan net.Conn)
 		go func(acceptor net.Listener) {
+			fmt.Println("acceptor")
 			defer acceptor.Close()
 			for {
 				conn, err := acceptor.Accept()
@@ -49,6 +50,7 @@ func (kvs *keyValueServer) Start(port int) error {
 			}
 
 		}(acceptor)
+		cnt:=0
 		for {
 			select {
 			case <-kvs.close:
@@ -61,25 +63,33 @@ func (kvs *keyValueServer) Start(port int) error {
 				}
 				return
 			case conn := <-connected:
-				clientSet[conn] = make(chan string)
+				clientSet[conn] = make(chan string, 1600)
 				go worker(conn, clientSet[conn], kvs.kvPut, kvs.kvGet, exitChan)
 			case <-kvs.clients:
 				kvs.clients <- len(clientSet)
 			case c := <-exitChan:
 				delete(clientSet, c)
 			case msg := <-kvs.broadcast:
+				fmt.Printf("bc %d\n", cnt)
+
 				for _, v := range clientSet {
+					prev  := len(v)
 					select {
 					case v <- msg:
+						fmt.Printf("passed msg %d  prevlen: %d cur len : %d\n", cnt, prev, len(v))
 					default:
+						fmt.Printf("!!!!!!!!!!!!!drop msg cur len:%d\n", len(v))
 					}
 				}
+				cnt++
 			}
 		}
 	}(listener)
 
 	go func(putMsg chan string, getMsg chan string) {
+		fmt.Println("db access")
 		init_db()
+		cnt := 0
 		for {
 			select {
 			case k := <-getMsg:
@@ -88,16 +98,18 @@ func (kvs *keyValueServer) Start(port int) error {
 				ret := k + "," + sv
 
 				if len(ret) == len(k) {
-					fmt.Printf("%v", kvstore)
+					fmt.Printf("%v*********************\n", kvstore)
 				}
-				fmt.Printf("get k: %v v :%v ret : %v\n", k, v, ret)
+				//fmt.Printf("get k: %v v :%v ret : %v\n", k, v, ret)
 				kvs.broadcast <- ret
+				fmt.Printf("broadcast : %d\n", cnt)
+				cnt++
 			case msg := <-putMsg:
 				cmds := strings.Split(msg, ",")
 				k := cmds[0]
 				v := cmds[1]
 				put(k, []byte(v))
-				fmt.Printf("put k: %v v :%v\n", k, string(get(k)))
+				//fmt.Printf("put k: %v v :%v\n", k, string(get(k)))
 			}
 		}
 	}(kvs.kvPut, kvs.kvGet)
@@ -121,9 +133,10 @@ func checkError(err error) {
 }
 
 func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan string, exitChan chan net.Conn) {
+	fmt.Println("worker")
 	defer conn.Close()
 	defer func() { exitChan <- conn }()
-	rb := make(chan string, 500)
+
 	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 	line := make(chan string)
 	go func(reader *bufio.ReadWriter) {
@@ -137,17 +150,24 @@ func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan
 			}
 		}
 	}(rw)
+	cnt := 0
 	for {
 		select {
 		case msg := <-msgChannel:
+			fmt.Printf("read from msgChannel %d items in chan:%d\n", cnt, len(msgChannel))
 			if msg == "close" {
 				return
 			}
-			rb <- msg
-		case v := <-rb:
-			fmt.Printf("worker write out :%v", v)
-			rw.WriteString(v)
+			//rb <- msg
+			//fmt.Printf("added to rb %d\n", cnt)
+			cnt++
+		//case
+		// v := <-rb:
+		//	fmt.Printf("worker write out :%v\n", msg)
+			rw.WriteString(msg + "\n")
+			rw.Flush()
 		case msg := <-line:
+			fmt.Printf("incomming : %v \n", msg)
 			if msg == "" {
 				return
 			}
@@ -157,14 +177,6 @@ func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan
 				kvPut <- cmds[1] + "," + cmds[2]
 			case cmds[0] == "get":
 				kvGet <- cmds[1]
-				//out := <-kvGet
-				//fmt.Printf("reply get: [%v]\n", out)
-				//out = out + "\n"
-				//_, writeErr := rw.Write([]byte(out))
-				//rw.Flush()
-				//if writeErr != nil {
-				//	return
-				//}
 			}
 		}
 	}
