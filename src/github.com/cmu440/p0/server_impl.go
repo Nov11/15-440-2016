@@ -12,16 +12,17 @@ import (
 )
 
 type keyValueServer struct {
-	port    int
-	close   chan int
-	clients chan int
-	kvPut   chan string
-	kvGet   chan string
+	port      int
+	close     chan int
+	clients   chan int
+	kvPut     chan string
+	kvGet     chan string
+	broadcast chan string
 }
 
 // New creates and returns (but does not start) a new KeyValueServer.
 func New() KeyValueServer {
-	return &keyValueServer{clients: make(chan int), close: make(chan int), kvPut: make(chan string), kvGet: make(chan string)}
+	return &keyValueServer{clients: make(chan int)		, close: make(chan int)		, kvPut: make(chan string)		, kvGet: make(chan string), broadcast: make(chan string)}
 }
 
 func (kvs *keyValueServer) Start(port int) error {
@@ -32,11 +33,12 @@ func (kvs *keyValueServer) Start(port int) error {
 		return err
 	}
 	go func(acceptor net.Listener) {
-		defer acceptor.Close()
+
 		clientSet := make(map[net.Conn]chan string)
 		exitChan := make(chan net.Conn)
 		connected := make(chan net.Conn)
 		go func(acceptor net.Listener) {
+			defer acceptor.Close()
 			for {
 				conn, err := acceptor.Accept()
 				if err != nil {
@@ -61,11 +63,17 @@ func (kvs *keyValueServer) Start(port int) error {
 			case conn := <-connected:
 				clientSet[conn] = make(chan string)
 				go worker(conn, clientSet[conn], kvs.kvPut, kvs.kvGet, exitChan)
-
 			case <-kvs.clients:
 				kvs.clients <- len(clientSet)
 			case c := <-exitChan:
 				delete(clientSet, c)
+			case msg := <-kvs.broadcast:
+				for _, v := range clientSet {
+					select {
+					case v <- msg:
+					default:
+					}
+				}
 			}
 		}
 	}(listener)
@@ -77,13 +85,13 @@ func (kvs *keyValueServer) Start(port int) error {
 			case k := <-getMsg:
 				v := get(k)
 				sv := string(v)
-				ret := k + "," +sv
+				ret := k + "," + sv
 
-				if len(ret) == len(k){
+				if len(ret) == len(k) {
 					fmt.Printf("%v", kvstore)
 				}
 				fmt.Printf("get k: %v v :%v ret : %v\n", k, v, ret)
-				getMsg <- ret
+				kvs.broadcast <- ret
 			case msg := <-putMsg:
 				cmds := strings.Split(msg, ",")
 				k := cmds[0]
@@ -146,17 +154,17 @@ func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan
 			cmds := strings.Split(msg, ",")
 			switch {
 			case cmds[0] == "put":
-				kvPut <- cmds[1]+","+cmds[2]
+				kvPut <- cmds[1] + "," + cmds[2]
 			case cmds[0] == "get":
 				kvGet <- cmds[1]
-				out := <-kvGet
-				fmt.Printf("reply get: [%v]\n", out)
-				out = out + "\n"
-				_, writeErr := rw.Write([]byte(out))
-				rw.Flush()
-				if writeErr != nil {
-					return
-				}
+				//out := <-kvGet
+				//fmt.Printf("reply get: [%v]\n", out)
+				//out = out + "\n"
+				//_, writeErr := rw.Write([]byte(out))
+				//rw.Flush()
+				//if writeErr != nil {
+				//	return
+				//}
 			}
 		}
 	}
