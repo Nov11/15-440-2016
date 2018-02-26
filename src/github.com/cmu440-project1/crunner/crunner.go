@@ -1,12 +1,12 @@
 package main
 
 import (
-    "fmt"
+	"fmt"
 )
 
 const (
-    defaultHost = "localhost"
-    defaultPort = 9999
+	defaultHost = "localhost"
+	defaultPort = 9999
 )
 
 // To test your server implementation, you might find it helpful to implement a
@@ -15,5 +15,5 @@ const (
 // read and print out the server's response to standard output. Whether or
 // not you add any code to this file will not affect your grade.
 func main() {
-    fmt.Println("Not implemented.")
+	fmt.Println("Not implemented.")
 }
