@@ -50,7 +50,7 @@ func (kvs *keyValueServer) Start(port int) error {
 			}
 
 		}(acceptor)
-		cnt:=0
+		cnt := 0
 		for {
 			select {
 			case <-kvs.close:
@@ -63,7 +63,7 @@ func (kvs *keyValueServer) Start(port int) error {
 				}
 				return
 			case conn := <-connected:
-				clientSet[conn] = make(chan string, 1600)
+				clientSet[conn] = make(chan string, 500)
 				go worker(conn, clientSet[conn], kvs.kvPut, kvs.kvGet, exitChan)
 			case <-kvs.clients:
 				kvs.clients <- len(clientSet)
@@ -72,8 +72,19 @@ func (kvs *keyValueServer) Start(port int) error {
 			case msg := <-kvs.broadcast:
 				fmt.Printf("bc %d\n", cnt)
 
+				//valid := true
+				//for try := 0; try < 2; try++{
+				//	for _, v:=range clientSet{
+				//		if len(v) == cap(v){
+				//			valid = false
+				//		}
+				//	}
+				//	time.
+				//}
+				//
+
 				for _, v := range clientSet {
-					prev  := len(v)
+					prev := len(v)
 					select {
 					case v <- msg:
 						fmt.Printf("passed msg %d  prevlen: %d cur len : %d\n", cnt, prev, len(v))
@@ -150,21 +161,36 @@ func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan
 			}
 		}
 	}(rw)
-	cnt := 0
+	//cnt := 0
 	for {
 		select {
 		case msg := <-msgChannel:
-			fmt.Printf("read from msgChannel %d items in chan:%d\n", cnt, len(msgChannel))
-			if msg == "close" {
-				return
+			//	fmt.Printf("read from msgChannel %d items in chan:%d\n", cnt, len(msgChannel))
+			//	if msg == "close" {
+			//		return
+			//	}
+			//	//rb <- msg
+			//	//fmt.Printf("added to rb %d\n", cnt)
+			//	cnt++
+			////case
+			//// v := <-rb:
+			////	fmt.Printf("worker write out :%v\n", msg)
+			//	rw.WriteString(msg + "\n")
+			//	rw.Flush()
+			//bulk read
+			var message []string
+			message = append(message, msg)
+			for msg != "" {
+				select {
+				case msg := <-msgChannel:
+					message = append(message, msg)
+				default:
+					msg = ""
+				}
 			}
-			//rb <- msg
-			//fmt.Printf("added to rb %d\n", cnt)
-			cnt++
-		//case
-		// v := <-rb:
-		//	fmt.Printf("worker write out :%v\n", msg)
-			rw.WriteString(msg + "\n")
+			for _, v := range message {
+				rw.WriteString(v + "\n")
+			}
 			rw.Flush()
 		case msg := <-line:
 			fmt.Printf("incomming : %v \n", msg)
