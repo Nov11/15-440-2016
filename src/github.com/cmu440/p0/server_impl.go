@@ -3,12 +3,12 @@
 package p0
 
 import (
+	"bufio"
+	"fmt"
 	"net"
 	"os"
-	"fmt"
-	"bufio"
-	"strings"
 	"strconv"
+	"strings"
 )
 
 type keyValueServer struct {
