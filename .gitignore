@@ -6,8 +6,7 @@
 # Folders
 _obj
 _test
-bin/
-pkg/
+.idea/
 
 # Architecture specific extensions/prefixes
 *.[568vq]
@@ -23,4 +22,10 @@ _testmain.go
 
 *.exe
 
-.idea/
+# LaTex stuff
+*.gz
+*.aux
+*.out
+
+# For Macs
+.DS_Store
