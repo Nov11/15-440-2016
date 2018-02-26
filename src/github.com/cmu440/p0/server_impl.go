@@ -26,17 +26,20 @@ func New() KeyValueServer {
 }
 
 func (kvs *keyValueServer) Start(port int) error {
+	init_db()
 	kvs.port = port
 	tmp := ":" + strconv.Itoa(port)
 	listener, err := net.Listen("tcp", tmp)
 	if err != nil {
 		return err
 	}
+	shutDb := make(chan int, 1)
 	go func(acceptor net.Listener) {
 		//fmt.Println("main starter")
 		clientSet := make(map[net.Conn]chan string)
 		exitChan := make(chan net.Conn)
 		connected := make(chan net.Conn)
+		closeAcceptor := make(chan int, 1)
 		go func(acceptor net.Listener) {
 			//fmt.Println("acceptor")
 			defer acceptor.Close()
@@ -44,6 +47,11 @@ func (kvs *keyValueServer) Start(port int) error {
 				conn, err := acceptor.Accept()
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Accept connection error: %s", err.Error())
+					select {
+					case <-closeAcceptor:
+						return
+					default:
+					}
 				} else {
 					connected <- conn
 				}
@@ -61,6 +69,9 @@ func (kvs *keyValueServer) Start(port int) error {
 					default:
 					}
 				}
+				closeAcceptor <- 1
+				acceptor.Close()
+				shutDb <- 1
 				return
 			case conn := <-connected:
 				clientSet[conn] = make(chan string, 500)
@@ -88,7 +99,6 @@ func (kvs *keyValueServer) Start(port int) error {
 
 	go func(putMsg chan string, getMsg chan string) {
 		//fmt.Println("db access")
-		init_db()
 		cnt := 0
 		for {
 			select {
@@ -108,6 +118,8 @@ func (kvs *keyValueServer) Start(port int) error {
 				k := cmds[0]
 				v := cmds[1]
 				put(k, []byte(v))
+			case <-shutDb:
+				return
 			}
 		}
 	}(kvs.kvPut, kvs.kvGet)
@@ -123,12 +135,12 @@ func (kvs *keyValueServer) Count() int {
 	return <-kvs.clients
 }
 
-func checkError(err error) {
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
-		os.Exit(1)
-	}
-}
+//func checkError(err error) {
+//	if err != nil {
+//		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
+//		os.Exit(1)
+//	}
+//}
 
 func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan string, exitChan chan net.Conn) {
 	//fmt.Println("worker")
