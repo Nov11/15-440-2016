@@ -297,7 +297,7 @@ func (ts *testSystem) runTest(numMsgs, timeout int, normalClients, slowClients [
             } else {
                 keyValueTrackMap[keyValue] += numClients
             }
-            fmt.Printf("+add to hash:%v", keyValue)
+            //fmt.Printf("+add to hash:%v", keyValue)
             if _, err := cli.conn.Write([]byte(request)); err != nil {
                 // Abort! Error writing to the network.
                 return err

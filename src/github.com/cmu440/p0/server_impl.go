@@ -33,12 +33,12 @@ func (kvs *keyValueServer) Start(port int) error {
 		return err
 	}
 	go func(acceptor net.Listener) {
-		fmt.Println("main starter")
+		//fmt.Println("main starter")
 		clientSet := make(map[net.Conn]chan string)
 		exitChan := make(chan net.Conn)
 		connected := make(chan net.Conn)
 		go func(acceptor net.Listener) {
-			fmt.Println("acceptor")
+			//fmt.Println("acceptor")
 			defer acceptor.Close()
 			for {
 				conn, err := acceptor.Accept()
@@ -70,26 +70,15 @@ func (kvs *keyValueServer) Start(port int) error {
 			case c := <-exitChan:
 				delete(clientSet, c)
 			case msg := <-kvs.broadcast:
-				fmt.Printf("bc %d\n", cnt)
-
-				//valid := true
-				//for try := 0; try < 2; try++{
-				//	for _, v:=range clientSet{
-				//		if len(v) == cap(v){
-				//			valid = false
-				//		}
-				//	}
-				//	time.
-				//}
-				//
+				//fmt.Printf("bc %d\n", cnt)
 
 				for _, v := range clientSet {
-					prev := len(v)
+					//prev := len(v)
 					select {
 					case v <- msg:
-						fmt.Printf("passed msg %d  prevlen: %d cur len : %d\n", cnt, prev, len(v))
+						//fmt.Printf("passed msg %d  prevlen: %d cur len : %d\n", cnt, prev, len(v))
 					default:
-						fmt.Printf("!!!!!!!!!!!!!drop msg cur len:%d\n", len(v))
+						//fmt.Printf("!!!!!!!!!!!!!drop msg cur len:%d\n", len(v))
 					}
 				}
 				cnt++
@@ -98,7 +87,7 @@ func (kvs *keyValueServer) Start(port int) error {
 	}(listener)
 
 	go func(putMsg chan string, getMsg chan string) {
-		fmt.Println("db access")
+		//fmt.Println("db access")
 		init_db()
 		cnt := 0
 		for {
@@ -111,16 +100,14 @@ func (kvs *keyValueServer) Start(port int) error {
 				if len(ret) == len(k) {
 					fmt.Printf("%v*********************\n", kvstore)
 				}
-				//fmt.Printf("get k: %v v :%v ret : %v\n", k, v, ret)
 				kvs.broadcast <- ret
-				fmt.Printf("broadcast : %d\n", cnt)
+				//fmt.Printf("broadcast : %d\n", cnt)
 				cnt++
 			case msg := <-putMsg:
 				cmds := strings.Split(msg, ",")
 				k := cmds[0]
 				v := cmds[1]
 				put(k, []byte(v))
-				//fmt.Printf("put k: %v v :%v\n", k, string(get(k)))
 			}
 		}
 	}(kvs.kvPut, kvs.kvGet)
@@ -144,7 +131,7 @@ func checkError(err error) {
 }
 
 func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan string, exitChan chan net.Conn) {
-	fmt.Println("worker")
+	//fmt.Println("worker")
 	defer conn.Close()
 	defer func() { exitChan <- conn }()
 
@@ -161,22 +148,9 @@ func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan
 			}
 		}
 	}(rw)
-	//cnt := 0
 	for {
 		select {
 		case msg := <-msgChannel:
-			//	fmt.Printf("read from msgChannel %d items in chan:%d\n", cnt, len(msgChannel))
-			//	if msg == "close" {
-			//		return
-			//	}
-			//	//rb <- msg
-			//	//fmt.Printf("added to rb %d\n", cnt)
-			//	cnt++
-			////case
-			//// v := <-rb:
-			////	fmt.Printf("worker write out :%v\n", msg)
-			//	rw.WriteString(msg + "\n")
-			//	rw.Flush()
 			//bulk read
 			var message []string
 			message = append(message, msg)
@@ -193,7 +167,7 @@ func worker(conn net.Conn, msgChannel chan string, kvPut chan string, kvGet chan
 			}
 			rw.Flush()
 		case msg := <-line:
-			fmt.Printf("incomming : %v \n", msg)
+			//fmt.Printf("incomming : %v \n", msg)
 			if msg == "" {
 				return
 			}
