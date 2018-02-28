@@ -2,10 +2,23 @@
 
 package lsp
 
-import "errors"
+import (
+	"errors"
+	"github.com/cmu440-project2/lspnet"
+	"fmt"
+	"bufio"
+	"encoding/json"
+	"os"
+	"time"
+)
 
 type client struct {
-	// TODO: implement this!
+	connectionId             int
+	nextSequenceNumber       int
+	remoteNextSequenceNumber int
+	closed                   bool
+	remoteHost               string
+	params                   Params
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -19,11 +32,81 @@ type client struct {
 // hostport is a colon-separated string identifying the server's host address
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, params *Params) (Client, error) {
-	return nil, errors.New("not yet implemented")
+	ret := client{
+		connectionId: 0, nextSequenceNumber: 0, remoteNextSequenceNumber: 0, closed: false, remoteHost: hostport, params: *params,
+	}
+	conn, err := lspnet.DialUDP(hostport, nil, nil)
+	if err != nil {
+		fmt.Println(err.Error())
+		return nil, err
+	}
+	msg, err := json.Marshal(*NewConnect())
+	checkError(err)
+
+	err = ret.doWithEpoch(func(result chan error) {
+		_, err = bufio.NewWriter(conn).Write(msg)
+		if err != nil {
+			result <- err
+			return
+		}
+		buff := make([]byte, 1024)
+		readCnt := 0
+		readCnt, err := bufio.NewReader(conn).Read(buff)
+		checkError(err)
+		ack := Message{}
+		json.Unmarshal(buff[:readCnt], &ack)
+		if !ret.verify(ack) && ack.Type != MsgAck {
+			result <- errors.New("invalid ack message")
+			return
+		}
+		ret.connectionId = ack.ConnID
+		result <- nil
+		return
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &ret, nil
+}
+
+func (c *client) doWithEpoch(work func(chan error)) error {
+	for tried := 0; tried < c.params.EpochLimit; tried++ {
+		timeOut := time.After(time.Duration(c.params.EpochMillis) * time.Millisecond)
+		channel := make(chan error)
+		go func() {
+			work(channel)
+		}()
+		select {
+		case <-timeOut:
+		case err := <-channel:
+			return err
+		}
+	}
+	return errors.New("time out")
+}
+func (c *client) verify(msg Message) bool {
+	if msg.Type != MsgConnect && msg.Type != MsgData && msg.Type != MsgAck {
+		return false
+	}
+
+	if c.connectionId != 0 && msg.ConnID != c.connectionId {
+		return false
+	}
+
+	if msg.Size > len(msg.Payload) {
+		return false
+	}
+
+	if msg.Size < len(msg.Payload) {
+		msg.Payload = msg.Payload[msg.Size:]
+	}
+
+	return true
 }
 
 func (c *client) ConnID() int {
-	return -1
+	return c.connectionId
 }
 
 func (c *client) Read() ([]byte, error) {
@@ -38,4 +121,10 @@ func (c *client) Write(payload []byte) error {
 
 func (c *client) Close() error {
 	return errors.New("not yet implemented")
+}
+func checkError(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
+		os.Exit(1)
+	}
 }
