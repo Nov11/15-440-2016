@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"time"
+	"sync"
 )
 
 type client struct {
@@ -19,6 +20,7 @@ type client struct {
 	closed                   bool
 	remoteHost               string
 	params                   Params
+	mtx                     sync.Mutex
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -55,11 +57,15 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		checkError(err)
 		ack := Message{}
 		json.Unmarshal(buff[:readCnt], &ack)
-		if !ret.verify(ack) && ack.Type != MsgAck {
+		if !ret.verify(ack) || ack.Type != MsgAck {
 			result <- errors.New("invalid ack message")
 			return
 		}
-		ret.connectionId = ack.ConnID
+		ret.mtx.Lock()
+		if ret.connectionId != 0{
+			ret.connectionId = ack.ConnID
+		}
+		ret.mtx.Unlock()
 		result <- nil
 		return
 	})
