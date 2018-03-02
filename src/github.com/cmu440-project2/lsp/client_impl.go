@@ -20,7 +20,8 @@ type client struct {
 	closed                   bool
 	remoteHost               string
 	params                   Params
-	mtx                     sync.Mutex
+	mtx                      sync.Mutex
+	readTimerReset           chan int
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -35,7 +36,7 @@ type client struct {
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, params *Params) (Client, error) {
 	ret := client{
-		connectionId: 0, nextSequenceNumber: 0, remoteNextSequenceNumber: 0, closed: false, remoteHost: hostport, params: *params,
+		connectionId: 0, nextSequenceNumber: 0, remoteNextSequenceNumber: 0, closed: false, remoteHost: hostport, params: *params, readTimerReset: make(chan int),
 	}
 	conn, err := lspnet.DialUDP(hostport, nil, nil)
 	if err != nil {
@@ -62,7 +63,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 			return
 		}
 		ret.mtx.Lock()
-		if ret.connectionId != 0{
+		if ret.connectionId != 0 {
 			ret.connectionId = ack.ConnID
 		}
 		ret.mtx.Unlock()
@@ -72,7 +73,21 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	go func() {
+		for tried := 0; tried < params.EpochLimit; tried++ {
+			timeOut := time.After(time.Duration(params.EpochMillis) * time.Millisecond)
+			select {
+			case <-timeOut:
+			case <-ret.readTimerReset:
+				tried = 0
+			}
+			msg, err := json.Marshal(*NewAck(ret.connectionId, 0))
+			checkError(err)
+			err = ret.Write(msg)
+			checkError(err)
+		}
 
+	}()
 	return &ret, nil
 }
 
@@ -91,6 +106,7 @@ func (c *client) doWithEpoch(work func(chan error)) error {
 	}
 	return errors.New("time out")
 }
+
 func (c *client) verify(msg Message) bool {
 	if msg.Type != MsgConnect && msg.Type != MsgData && msg.Type != MsgAck {
 		return false
@@ -117,6 +133,8 @@ func (c *client) ConnID() int {
 
 func (c *client) Read() ([]byte, error) {
 	// TODO: remove this line when you are ready to begin implementing this method.
+	// once read message, update readerTimerReset channel
+	//
 	select {} // Blocks indefinitely.
 	return nil, errors.New("not yet implemented")
 }
@@ -128,6 +146,7 @@ func (c *client) Write(payload []byte) error {
 func (c *client) Close() error {
 	return errors.New("not yet implemented")
 }
+
 func checkError(err error) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
