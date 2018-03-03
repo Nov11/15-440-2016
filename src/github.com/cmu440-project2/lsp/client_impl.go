@@ -3,15 +3,13 @@
 package lsp
 
 import (
-	"errors"
-	"github.com/cmu440-project2/lspnet"
-	"fmt"
-	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/cmu440-project2/lspnet"
 	"os"
-	"time"
 	"sync"
-	"net"
+	"time"
 )
 
 type client struct {
@@ -31,7 +29,8 @@ type client struct {
 
 	receiveMessageQueue []Message
 	unAckedMessage      map[Message]int
-	connection          net.Conn
+	connection          lspnet.UDPConn
+	address             lspnet.UDPAddr
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -61,7 +60,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		receiveMessageQueue:      nil,
 		unAckedMessage:           make(map[Message]int),
 	}
-	conn, err := lspnet.DialUDP(hostport, nil, nil)
+	conn, err := lspnet.DialUDP(hostport, nil, &ret.address)
 	if err != nil {
 		fmt.Println(err.Error())
 		return nil, err
@@ -70,14 +69,14 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	checkError(err)
 
 	err = ret.doWithEpoch(func(result chan error) {
-		_, err = bufio.NewWriter(conn).Write(msg)
+		_, err := conn.WriteToUDP(msg, &ret.address)
 		if err != nil {
 			result <- err
 			return
 		}
 		buff := make([]byte, 1024)
 		readCnt := 0
-		readCnt, err := bufio.NewReader(conn).Read(buff)
+		readCnt, _, err = conn.ReadFromUDP(buff)
 		checkError(err)
 		ack := Message{}
 		json.Unmarshal(buff[:readCnt], &ack)
@@ -110,33 +109,8 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	//the basic incoming input are connection read, write and time out.
 	//and also close from client driver application
 
-	//this is for writing
-	go func() {
-		writer := bufio.NewWriter(conn)
-		for {
-			select {
-			case <-ret.writeClose:
-				//write all the remaining message(from window & queue)
-				//and wait until all the packets get acknowledged
-				for len(ret.writeWindow) > 0 {
-					msg := <-ret.writeWindow
-					writer.Write(msg)
-				}
-				for len(ret.writeMsg) > 0 {
-					msg := <-ret.writeMsg
-					byteMsg, err := json.Marshal(msg)
-					checkError(err)
-					writer.Write(byteMsg)
-				}
-				return
-			case msg := <-ret.writeWindow:
-				writer.Write(msg)
-				writer.Flush()
-			}
-		}
-
-	}()
-
+	writer := newWriterWithWindow(params.WindowSize, *conn, ret.address)
+	go ret.readSocket(*conn)
 	go func() {
 		timeOutCntLeft := ret.params.EpochLimit
 		timeOut := time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
@@ -144,7 +118,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		for {
 			select {
 			case <-ret.clientClose:
-
+				writer.close()
 				ret.writeClose <- 1
 			case receiveMsg := <-ret.receiveMsg:
 				//validate
@@ -153,6 +127,9 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				receiveCntInThisEpoch++
 				//push to receiveMessage queue
 				ret.receiveMessageQueue = append(ret.receiveMessageQueue, receiveMsg)
+				if receiveMsg.Type == MsgAck {
+					writer.getAck(receiveMsg.SeqNum)
+				}
 			case <-timeOut:
 				timeOutCntLeft--
 				if timeOutCntLeft == 0 {
@@ -163,7 +140,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				}
 				// if there is msg that hasn't receive ack
 				// resend that packet
-
+				writer.resend()
 			}
 		}
 	}()
@@ -237,10 +214,10 @@ func checkError(err error) {
 //this should be a typical routine / building block as there is no async/no blocking io in golang
 //select case/default is the only way to express non blocking io.
 //this routine is shutdown by client on conn.Close()
-func (c *client) readSocket(conn net.Conn) {
+func (c *client) readSocket(conn lspnet.UDPConn) {
 	for {
 		buffer := make([]byte, 1024)
-		n, err := bufio.NewReader(conn).Read(buffer)
+		n, _, err := conn.ReadFromUDP(buffer)
 		//do I have to branch on eof and error?
 		//if eof is received, it means that peer will not send any message and read routine can terminate.
 		//but I can still send message as the current client is not closed.
@@ -258,20 +235,24 @@ func (c *client) readSocket(conn net.Conn) {
 	}
 }
 
-func (c *client) stopReadingSocket(conn net.Conn) {
+func (c *client) stopReadingSocket(conn lspnet.UDPConn) {
 	conn.Close()
 }
 
-func writeSocket(conn net.Conn, sendMsg chan Message, explicitClose chan bool) {
-	writer := bufio.NewWriter(conn)
+func writeSocket(conn lspnet.UDPConn, addr *lspnet.UDPAddr, sendMsg chan Message, explicitClose chan bool) {
 	for {
 		select {
 		case msg := <-sendMsg:
-			writer.Write(encode(msg))
+			bytes := encode(msg)
+			conn.WriteToUDP(bytes, addr)
 		case <-explicitClose:
 			return
 		}
 	}
+}
+
+func (www *writerWithWindow) writeMessage(message Message) {
+	www.conn.WriteToUDP(encode(message), &www.address)
 }
 
 type writerWithWindow struct {
@@ -280,13 +261,17 @@ type writerWithWindow struct {
 	windowSize     int
 	shutdown       chan int
 	newMessage     chan Message
+	conn           lspnet.UDPConn
+	address        lspnet.UDPAddr
 }
 
-func newWriterWithWindow(windowSize int) writerWithWindow {
+func newWriterWithWindow(windowSize int, conn lspnet.UDPConn, addr lspnet.UDPAddr) writerWithWindow {
 	ret := writerWithWindow{
 		windowSize: windowSize,
 		shutdown:   make(chan int),
 		newMessage: make(chan Message),
+		conn:       conn,
+		address:    addr,
 	}
 	return ret
 }
@@ -322,6 +307,12 @@ func (www *writerWithWindow) getAck(number int) {
 			www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
 			break
 		}
+	}
+}
+
+func (www *writerWithWindow) resend() {
+	for i := 0; i < www.needAck; i++ {
+		www.writeMessage(www.pendingMessage[i])
 	}
 }
 
