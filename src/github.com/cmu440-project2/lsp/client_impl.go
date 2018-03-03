@@ -28,10 +28,14 @@ type client struct {
 	//writeClose               chan int
 	//writeWindow              chan []byte
 
-	receiveMessageQueue []Message
-	unAckedMessage      map[Message]int
-	connection          lspnet.UDPConn
-	address             lspnet.UDPAddr
+	receiveMessageQueue  []Message
+	unAckedMessage       map[Message]int
+	connection           lspnet.UDPConn
+	address              lspnet.UDPAddr
+	writer               writerWithWindow
+	closing              bool
+	cmdReadNewestMessage chan int
+	dataNewestMessage    chan Message
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -59,8 +63,10 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		//writeMsg:                 make(chan Message),
 		//writeClose:               make(chan int),
 		//writeWindow:              make(chan []byte, params.WindowSize),
-		receiveMessageQueue: nil,
-		unAckedMessage:      make(map[Message]int),
+		receiveMessageQueue:  nil,
+		unAckedMessage:       make(map[Message]int),
+		cmdReadNewestMessage: make(chan int),
+		dataNewestMessage:    make(chan Message),
 	}
 	conn, err := lspnet.DialUDP(hostport, nil, &ret.address)
 	if err != nil {
@@ -113,14 +119,17 @@ func NewClient(hostport string, params *Params) (Client, error) {
 
 	writerClosed := make(chan error)
 	writer := newWriterWithWindow(params.WindowSize, *conn, ret.address, writerClosed)
+	ret.writer = writer
 	go ret.readSocket(*conn)
 	go func() {
 		timeOutCntLeft := ret.params.EpochLimit
 		timeOut := time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
 		receiveCntInThisEpoch := 0
+		reqReadMsg := false
 		for {
 			select {
 			case <-ret.clientClose:
+				ret.closing = true
 				writer.close()
 			case receiveMsg := <-ret.receiveMsg:
 				//validate
@@ -131,6 +140,11 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				ret.receiveMessageQueue = append(ret.receiveMessageQueue, receiveMsg)
 				if receiveMsg.Type == MsgAck {
 					writer.getAck(receiveMsg.SeqNum)
+				}
+				if reqReadMsg {
+					reqReadMsg = false
+					ret.dataNewestMessage <- ret.receiveMessageQueue[0]
+					ret.receiveMessageQueue = ret.receiveMessageQueue[1:]
 				}
 			case <-timeOut:
 				timeOutCntLeft--
@@ -145,6 +159,13 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				writer.resend()
 			case err := <-writerClosed:
 				ret.fullyClosedDown <- err
+			case <-ret.cmdReadNewestMessage:
+				reqReadMsg = true
+				if len(ret.receiveMessageQueue) > 0 {
+					reqReadMsg = false
+					ret.dataNewestMessage <- ret.receiveMessageQueue[0]
+					ret.receiveMessageQueue = ret.receiveMessageQueue[1:]
+				}
 			}
 		}
 	}()
@@ -192,15 +213,21 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) Read() ([]byte, error) {
-	// TODO: remove this line when you are ready to begin implementing this method.
-	// once read message, update readerTimerReset channel
-	//
-	select {} // Blocks indefinitely.
-	return nil, errors.New("not yet implemented")
+	c.cmdReadNewestMessage <- 1
+	msg := <-c.dataNewestMessage
+	return encode(msg), errors.New("not yet implemented")
 }
 
 func (c *client) Write(payload []byte) error {
-	return errors.New("not yet implemented")
+	if c.closing {
+		return errors.New("client is closing. refuse sending new packets")
+	}
+	connId := c.connectionId
+	seq := c.nextSequenceNumber
+	c.nextSequenceNumber++
+	msg := NewData(connId, seq, len(payload), payload)
+	c.writer.add(msg)
+	return nil
 }
 
 func (c *client) Close() error {
@@ -304,8 +331,8 @@ func (www *writerWithWindow) start(toMsg chan Message) {
 	}()
 }
 
-func (www *writerWithWindow) add(msg Message) {
-	www.pendingMessage = append(www.pendingMessage, msg)
+func (www *writerWithWindow) add(msg *Message) {
+	www.pendingMessage = append(www.pendingMessage, *msg)
 }
 
 func (www *writerWithWindow) getAck(number int) {
