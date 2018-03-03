@@ -22,6 +22,14 @@ type client struct {
 	params                   Params
 	mtx                      sync.Mutex
 	readTimerReset           chan int
+	clientClose              chan int
+	receiveMsg               chan Message
+	writeMsg                 chan Message
+	writeClose               chan int
+	writeWindow              chan []byte
+
+	receiveMessageQueue []Message
+	unAckedMessage      map[Message]int
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -36,7 +44,20 @@ type client struct {
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, params *Params) (Client, error) {
 	ret := client{
-		connectionId: 0, nextSequenceNumber: 0, remoteNextSequenceNumber: 0, closed: false, remoteHost: hostport, params: *params, readTimerReset: make(chan int),
+		connectionId:             0,
+		nextSequenceNumber:       0,
+		remoteNextSequenceNumber: 0,
+		closed:                   false,
+		remoteHost:               hostport,
+		params:                   *params,
+		readTimerReset:           make(chan int),
+		clientClose:              make(chan int),
+		receiveMsg:               make(chan Message),
+		writeMsg:                 make(chan Message),
+		writeClose:               make(chan int),
+		writeWindow:              make(chan []byte, params.WindowSize),
+		receiveMessageQueue:      nil,
+		unAckedMessage:           make(map[Message]int),
 	}
 	conn, err := lspnet.DialUDP(hostport, nil, nil)
 	if err != nil {
@@ -63,7 +84,17 @@ func NewClient(hostport string, params *Params) (Client, error) {
 			return
 		}
 		ret.mtx.Lock()
-		if ret.connectionId != 0 {
+		//in case of n connection msg sent and receive n ack simultaneously
+		//server will assign only one connection id to one port
+		//the later connection msg receive from the same port will be ignored and return ack with -1(I picked this value)
+		//the client may receive acks of previous sent connection requests at the same time with many connectId == -1
+		//the only one above zero will be the real connection id
+		//if there is a bit flip in incoming msg, this should be detected in other mechanism
+		//mutex should serves as synchronization point. inside this section the current co routine should see the changes
+		//of others made to the connection id field. an atomic field may be better than this mutex approach. in case of
+		//heavy contention this will be a significant bottle neck, I think.
+		//co routines making connection will die eventually when return from this procedure without dangling or doing damage.
+		if ret.connectionId == 0 && ack.ConnID != 0 {
 			ret.connectionId = ack.ConnID
 		}
 		ret.mtx.Unlock()
@@ -73,20 +104,81 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	//this is the main event loop of a client. further abstraction may be applied.
+	//the basic incoming input are connection read, write and time out.
+	//and also close from client driver application
+
+	//this is for reading
 	go func() {
-		for tried := 0; tried < params.EpochLimit; tried++ {
-			timeOut := time.After(time.Duration(params.EpochMillis) * time.Millisecond)
-			select {
-			case <-timeOut:
-			case <-ret.readTimerReset:
-				tried = 0
+		for {
+			buffer := make([]byte, 1024)
+			n, err := bufio.NewReader(conn).Read(buffer)
+			if err != nil {
+				fmt.Println(err.Error())
+				return
 			}
-			msg, err := json.Marshal(*NewAck(ret.connectionId, 0))
+			msg := Message{}
+			err = json.Unmarshal(buffer[:n], &msg)
 			checkError(err)
-			err = ret.Write(msg)
-			checkError(err)
+			ret.receiveMsg <- msg
+		}
+	}()
+	//this is for writing
+	go func() {
+		writer := bufio.NewWriter(conn)
+		for {
+			select {
+			case <-ret.writeClose:
+				//write all the remaining message(from window & queue)
+				//and wait until all the packets get acknowledged
+				for len(ret.writeWindow) > 0 {
+					msg := <-ret.writeWindow
+					writer.Write(msg)
+				}
+				for len(ret.writeMsg) > 0 {
+					msg := <-ret.writeMsg
+					byteMsg, err := json.Marshal(msg)
+					checkError(err)
+					writer.Write(byteMsg)
+				}
+				return
+			case msg := <-ret.writeWindow:
+				writer.Write(msg)
+				writer.Flush()
+			}
 		}
 
+	}()
+
+	go func() {
+		timeOutCntLeft := ret.params.EpochLimit
+		timeOut := time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
+		receiveCntInThisEpoch := 0
+		for {
+			select {
+			case <-ret.clientClose:
+
+				ret.writeClose <- 1
+			case receiveMsg := <-ret.receiveMsg:
+				//validate
+				ret.verify(receiveMsg)
+				//update epoch timeout count
+				receiveCntInThisEpoch++
+				//push to receiveMessage queue
+				ret.receiveMessageQueue = append(ret.receiveMessageQueue, receiveMsg)
+			case <-timeOut:
+				timeOutCntLeft--
+				if timeOutCntLeft == 0 {
+					ret.clientClose <- 1
+				}
+				if receiveCntInThisEpoch == 0 {
+					//resend ack
+				}
+				// if there is msg that hasn't receive ack
+				// resend that packet
+
+			}
+		}
 	}()
 	return &ret, nil
 }
