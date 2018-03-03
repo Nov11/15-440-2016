@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 	"sync"
+	"net"
 )
 
 type client struct {
@@ -30,6 +31,7 @@ type client struct {
 
 	receiveMessageQueue []Message
 	unAckedMessage      map[Message]int
+	connection          net.Conn
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -108,21 +110,6 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	//the basic incoming input are connection read, write and time out.
 	//and also close from client driver application
 
-	//this is for reading
-	go func() {
-		for {
-			buffer := make([]byte, 1024)
-			n, err := bufio.NewReader(conn).Read(buffer)
-			if err != nil {
-				fmt.Println(err.Error())
-				return
-			}
-			msg := Message{}
-			err = json.Unmarshal(buffer[:n], &msg)
-			checkError(err)
-			ret.receiveMsg <- msg
-		}
-	}()
 	//this is for writing
 	go func() {
 		writer := bufio.NewWriter(conn)
@@ -244,4 +231,111 @@ func checkError(err error) {
 		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
 		os.Exit(1)
 	}
+}
+
+//this is for reading
+//this should be a typical routine / building block as there is no async/no blocking io in golang
+//select case/default is the only way to express non blocking io.
+//this routine is shutdown by client on conn.Close()
+func (c *client) readSocket(conn net.Conn) {
+	for {
+		buffer := make([]byte, 1024)
+		n, err := bufio.NewReader(conn).Read(buffer)
+		//do I have to branch on eof and error?
+		//if eof is received, it means that peer will not send any message and read routine can terminate.
+		//but I can still send message as the current client is not closed.
+		//if other error is encountered, it means that the connection is broken and should be shutdown.
+		//when it comes to lsp, it's on a upper layer other then socket connection layer.
+		if err != nil {
+			fmt.Println(err.Error())
+			//should tear down every thing
+			c.Close()
+			return
+		}
+		msg := Message{}
+		decode(buffer[:n], &msg)
+		c.receiveMsg <- msg
+	}
+}
+
+func (c *client) stopReadingSocket(conn net.Conn) {
+	conn.Close()
+}
+
+func writeSocket(conn net.Conn, sendMsg chan Message, explicitClose chan bool) {
+	writer := bufio.NewWriter(conn)
+	for {
+		select {
+		case msg := <-sendMsg:
+			writer.Write(encode(msg))
+		case <-explicitClose:
+			return
+		}
+	}
+}
+
+type writerWithWindow struct {
+	pendingMessage []Message
+	needAck        int
+	windowSize     int
+	shutdown       chan int
+	newMessage     chan Message
+}
+
+func newWriterWithWindow(windowSize int) writerWithWindow {
+	ret := writerWithWindow{
+		windowSize: windowSize,
+		shutdown:   make(chan int),
+		newMessage: make(chan Message),
+	}
+	return ret
+}
+
+func (www *writerWithWindow) start(toMsg chan Message) {
+	go func() {
+		stop := false
+		for !stop && len(www.pendingMessage) == 0 {
+			select {
+			case <-www.shutdown:
+				stop = true
+				www.windowSize = 99999
+			case msg := <-www.newMessage:
+				www.pendingMessage = append(www.pendingMessage, msg)
+			default:
+				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize {
+					toMsg <- www.pendingMessage[www.needAck]
+					www.needAck++
+				}
+			}
+		}
+	}()
+}
+
+func (www *writerWithWindow) add(msg Message) {
+	www.pendingMessage = append(www.pendingMessage, msg)
+}
+
+func (www *writerWithWindow) getAck(number int) {
+	www.needAck--
+	for i := 0; i < www.windowSize; i++ {
+		if www.pendingMessage[i].SeqNum == number {
+			www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
+			break
+		}
+	}
+}
+
+func (www *writerWithWindow) close() {
+	www.shutdown <- 1
+}
+
+func decode(raw []byte, to interface{}) {
+	err := json.Unmarshal(raw, to)
+	checkError(err)
+}
+
+func encode(from interface{}) []byte {
+	ret, err := json.Marshal(from)
+	checkError(err)
+	return ret
 }
