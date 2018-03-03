@@ -16,16 +16,17 @@ type client struct {
 	connectionId             int
 	nextSequenceNumber       int
 	remoteNextSequenceNumber int
-	closed                   bool
-	remoteHost               string
-	params                   Params
-	mtx                      sync.Mutex
-	readTimerReset           chan int
-	clientClose              chan int
-	receiveMsg               chan Message
-	writeMsg                 chan Message
-	writeClose               chan int
-	writeWindow              chan []byte
+	//closed                   bool
+	remoteHost      string
+	params          Params
+	mtx             sync.Mutex
+	readTimerReset  chan int
+	clientClose     chan int
+	fullyClosedDown chan error
+	receiveMsg      chan Message
+	//writeMsg                 chan Message
+	//writeClose               chan int
+	//writeWindow              chan []byte
 
 	receiveMessageQueue []Message
 	unAckedMessage      map[Message]int
@@ -48,17 +49,18 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		connectionId:             0,
 		nextSequenceNumber:       0,
 		remoteNextSequenceNumber: 0,
-		closed:                   false,
-		remoteHost:               hostport,
-		params:                   *params,
-		readTimerReset:           make(chan int),
-		clientClose:              make(chan int),
-		receiveMsg:               make(chan Message),
-		writeMsg:                 make(chan Message),
-		writeClose:               make(chan int),
-		writeWindow:              make(chan []byte, params.WindowSize),
-		receiveMessageQueue:      nil,
-		unAckedMessage:           make(map[Message]int),
+		//closed:                   false,
+		remoteHost:      hostport,
+		params:          *params,
+		readTimerReset:  make(chan int),
+		clientClose:     make(chan int),
+		fullyClosedDown: make(chan error),
+		receiveMsg:      make(chan Message),
+		//writeMsg:                 make(chan Message),
+		//writeClose:               make(chan int),
+		//writeWindow:              make(chan []byte, params.WindowSize),
+		receiveMessageQueue: nil,
+		unAckedMessage:      make(map[Message]int),
 	}
 	conn, err := lspnet.DialUDP(hostport, nil, &ret.address)
 	if err != nil {
@@ -109,7 +111,8 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	//the basic incoming input are connection read, write and time out.
 	//and also close from client driver application
 
-	writer := newWriterWithWindow(params.WindowSize, *conn, ret.address)
+	writerClosed := make(chan error)
+	writer := newWriterWithWindow(params.WindowSize, *conn, ret.address, writerClosed)
 	go ret.readSocket(*conn)
 	go func() {
 		timeOutCntLeft := ret.params.EpochLimit
@@ -119,7 +122,6 @@ func NewClient(hostport string, params *Params) (Client, error) {
 			select {
 			case <-ret.clientClose:
 				writer.close()
-				ret.writeClose <- 1
 			case receiveMsg := <-ret.receiveMsg:
 				//validate
 				ret.verify(receiveMsg)
@@ -141,6 +143,8 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				// if there is msg that hasn't receive ack
 				// resend that packet
 				writer.resend()
+			case err := <-writerClosed:
+				ret.fullyClosedDown <- err
 			}
 		}
 	}()
@@ -200,7 +204,8 @@ func (c *client) Write(payload []byte) error {
 }
 
 func (c *client) Close() error {
-	return errors.New("not yet implemented")
+	c.clientClose <- 1
+	return <-c.fullyClosedDown
 }
 
 func checkError(err error) {
@@ -263,15 +268,17 @@ type writerWithWindow struct {
 	newMessage     chan Message
 	conn           lspnet.UDPConn
 	address        lspnet.UDPAddr
+	returnChannel  chan error
 }
 
-func newWriterWithWindow(windowSize int, conn lspnet.UDPConn, addr lspnet.UDPAddr) writerWithWindow {
+func newWriterWithWindow(windowSize int, conn lspnet.UDPConn, addr lspnet.UDPAddr, result chan error) writerWithWindow {
 	ret := writerWithWindow{
-		windowSize: windowSize,
-		shutdown:   make(chan int),
-		newMessage: make(chan Message),
-		conn:       conn,
-		address:    addr,
+		windowSize:    windowSize,
+		shutdown:      make(chan int),
+		newMessage:    make(chan Message),
+		conn:          conn,
+		address:       addr,
+		returnChannel: result,
 	}
 	return ret
 }
@@ -293,6 +300,7 @@ func (www *writerWithWindow) start(toMsg chan Message) {
 				}
 			}
 		}
+		www.returnChannel <- nil
 	}()
 }
 
@@ -318,6 +326,10 @@ func (www *writerWithWindow) resend() {
 
 func (www *writerWithWindow) close() {
 	www.shutdown <- 1
+}
+
+func (www *writerWithWindow) resultChannel() chan error {
+	return www.returnChannel
 }
 
 func decode(raw []byte, to interface{}) {
