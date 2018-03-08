@@ -13,25 +13,27 @@ import (
 )
 
 type client struct {
-	connectionId                int
-	connection                  lspnet.UDPConn
-	remoteAddress               lspnet.UDPAddr
-	nextSequenceNumber          int
-	remoteNextSequenceNumber    int
-	remoteHost                  string
-	params                      Params
-	mtx                         sync.Mutex
-	cmdClientClose              chan int
-	clientHasFullyClosedDown    chan error
-	dataIncomingMsg             chan Message
-	receiveMessageQueue         []Message
-	unAckMessage                map[Message]int
-	readTimerReset              chan int
-	writer                      writerWithWindow
-	closing                     bool
-	cmdReadNewestMessage        chan int
-	dataNewestMessage           chan Message
-	cmdQuitReadRoutine          chan int
+	connectionId             int
+	connection               lspnet.UDPConn
+	remoteAddress            lspnet.UDPAddr
+	nextSequenceNumber       int
+	remoteNextSequenceNumber int
+	remoteHost               string
+	params                   Params
+	mtx                      sync.Mutex
+	cmdClientClose           chan int
+	clientHasFullyClosedDown chan error
+	dataIncomingMsg          chan Message
+	receiveMessageQueue      []Message
+	unAckMessage             map[Message]int
+	readTimerReset           chan int
+	writer                   writerWithWindow
+	closing                  bool
+	closed                   bool
+	closeReason              string
+	cmdReadNewestMessage     chan int
+	dataNewestMessage        chan *Message
+	//cmdQuitReadRoutine          chan int
 	previousSeqNumReturnedToApp int
 }
 
@@ -47,20 +49,20 @@ type client struct {
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, params *Params) (Client, error) {
 	ret := client{
-		connectionId:                0,
-		nextSequenceNumber:          0,
-		remoteNextSequenceNumber:    0,
-		remoteHost:                  hostport,
-		params:                      *params,
-		readTimerReset:              make(chan int),
-		cmdClientClose:              make(chan int, 2),
-		clientHasFullyClosedDown:    make(chan error),
-		dataIncomingMsg:             make(chan Message),
-		receiveMessageQueue:         nil,
-		unAckMessage:                make(map[Message]int),
-		cmdReadNewestMessage:        make(chan int),
-		dataNewestMessage:           make(chan Message),
-		cmdQuitReadRoutine:          make(chan int),
+		connectionId:             0,
+		nextSequenceNumber:       0,
+		remoteNextSequenceNumber: 0,
+		remoteHost:               hostport,
+		params:                   *params,
+		readTimerReset:           make(chan int),
+		cmdClientClose:           make(chan int, 2),
+		clientHasFullyClosedDown: make(chan error),
+		dataIncomingMsg:          make(chan Message),
+		receiveMessageQueue:      nil,
+		unAckMessage:             make(map[Message]int),
+		cmdReadNewestMessage:     make(chan int),
+		dataNewestMessage:        make(chan *Message),
+		//cmdQuitReadRoutine:          make(chan int),
 		previousSeqNumReturnedToApp: -1,
 	}
 	//establish UDP connection to server
@@ -73,7 +75,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	msg, err := json.Marshal(*NewConnect())
 	checkError(err)
 	//fire up read routine
-	go ret.readSocket(ret.cmdQuitReadRoutine)
+	go ret.readSocket()
 	//send connection message and wait for server's reply
 	err = protocolConnect(msg, &ret)
 	if err != nil {
@@ -93,6 +95,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 			select {
 			case <-ret.cmdClientClose:
 				if ret.closing == false {
+					ret.closeReason = "explicitly close connection"
 					ret.closing = true
 					writer.close()
 				}
@@ -117,7 +120,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 					nextMsg := ret.getNextMessage()
 					if nextMsg != nil {
 						reqReadMsg = false
-						ret.dataNewestMessage <- *nextMsg
+						ret.dataNewestMessage <- nextMsg
 					}
 				}
 			case <-timeOut:
@@ -128,6 +131,8 @@ func NewClient(hostport string, params *Params) (Client, error) {
 					if timeOutCntLeft == 0 {
 						fmt.Println("client closing : no data message after epoch limit exceeded : ")
 						ret.cmdClientClose <- 1
+						ret.closing = true
+						ret.closeReason = "close due to time out"
 					}
 				}
 				if receivedMessageCountInThisEpoch == 0 {
@@ -140,13 +145,14 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				writer.resend()
 			case err := <-writerClosed:
 				ret.clientHasFullyClosedDown <- err
+				ret.closed = true
 				return
 			case <-ret.cmdReadNewestMessage:
 				reqReadMsg = true
 				msg := ret.getNextMessage()
 				if msg != nil {
 					reqReadMsg = false
-					ret.dataNewestMessage <- *msg
+					ret.dataNewestMessage <- msg
 				}
 			}
 		}
@@ -213,7 +219,7 @@ func (c *client) verify(msg Message) bool {
 	}
 
 	if msg.Size < len(msg.Payload) {
-		msg.Payload = msg.Payload[msg.Size:]
+		msg.Payload = msg.Payload[:msg.Size]
 	}
 
 	return true
@@ -223,10 +229,15 @@ func (c *client) ConnID() int {
 	return c.connectionId
 }
 
+//how to read message while bg routine is closing or just shutdown ?
+//at that time there's no routine exists to wait on cmd channel
 func (c *client) Read() ([]byte, error) {
 	c.cmdReadNewestMessage <- 1
 	msg := <-c.dataNewestMessage
-	return encode(msg), nil
+	if msg != nil {
+		return encode(*msg), nil
+	}
+	return nil, errors.New(c.closeReason)
 }
 
 func (c *client) Write(payload []byte) error {
@@ -257,28 +268,29 @@ func checkError(err error) {
 //this should be a typical routine / building block as there is no async/no blocking io in golang
 //select case/default is the only way to express non blocking io.
 //this routine is shutdown by client on conn.Close()
-func (c *client) readSocket(endThisRoutine chan int) {
+func (c *client) readSocket() {
 	conn := c.connection
 	for {
-		select {
-		case <-endThisRoutine:
+		//select {
+		////case <-c.cmdQuitReadRoutine:
+		////	return
+		//default:
+		buffer := make([]byte, 1024)
+		n, _, err := conn.ReadFromUDP(buffer)
+		if err != nil {
+			fmt.Println(err.Error())
 			return
-		default:
-			buffer := make([]byte, 1024)
-			n, _, err := conn.ReadFromUDP(buffer)
-			if err != nil {
-				fmt.Println(err.Error())
-				return
-			}
-			msg := Message{}
-			decode(buffer[:n], &msg)
-			c.dataIncomingMsg <- msg
 		}
+		msg := Message{}
+		decode(buffer[:n], &msg)
+		c.dataIncomingMsg <- msg
+		//}
 	}
 }
 
-func (c *client) stopReadingSocket(conn lspnet.UDPConn) {
-	conn.Close()
+func (c *client) stopReadingSocket() {
+	c.connection.Close()
+	//c.cmdQuitReadRoutine <- 1
 }
 
 func writeSocket(conn lspnet.UDPConn, addr *lspnet.UDPAddr, sendMsg chan Message, explicitClose chan bool) {
