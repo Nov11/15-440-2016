@@ -2,10 +2,17 @@
 
 package lsp
 
-import "errors"
+import (
+	"errors"
+	"github.com/cmu440-project2/lspnet"
+)
 
 type server struct {
-	// TODO: implement this!
+	address          lspnet.UDPAddr
+	connection       lspnet.UDPConn
+	nextConnectionId int
+	connectIdList    map[int]lspnet.UDPConn
+	closing          bool
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -15,7 +22,18 @@ type server struct {
 // project 0, etc.) and immediately return. It should return a non-nil error if
 // there was an error resolving or listening on the specified port number.
 func NewServer(port int, params *Params) (Server, error) {
-	return nil, errors.New("not yet implemented")
+	addr := lspnet.UDPAddr{}
+	conn, err := lspnet.ListenUDP("localhost:"+string(port), &addr)
+	if err != nil {
+		return nil, err
+	}
+	ret := server{address: addr,
+		connection: *conn,
+		nextConnectionId: 0,
+		connectIdList: make(map[int]lspnet.UDPConn),
+		closing: false,}
+
+	return &ret, nil
 }
 
 func (s *server) Read() (int, []byte, error) {

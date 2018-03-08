@@ -14,28 +14,24 @@ import (
 
 type client struct {
 	connectionId             int
+	connection               lspnet.UDPConn
+	remoteAddress            lspnet.UDPAddr
 	nextSequenceNumber       int
 	remoteNextSequenceNumber int
-	//closed                   bool
-	remoteHost      string
-	params          Params
-	mtx             sync.Mutex
-	readTimerReset  chan int
-	clientClose     chan int
-	fullyClosedDown chan error
-	receiveMsg      chan Message
-	//writeMsg                 chan Message
-	//writeClose               chan int
-	//writeWindow              chan []byte
-
-	receiveMessageQueue  []Message
-	unAckedMessage       map[Message]int
-	connection           lspnet.UDPConn
-	address              lspnet.UDPAddr
-	writer               writerWithWindow
-	closing              bool
-	cmdReadNewestMessage chan int
-	dataNewestMessage    chan Message
+	remoteHost               string
+	params                   Params
+	mtx                      sync.Mutex
+	cmdClientClose           chan int
+	clientHasFullyClosedDown chan error
+	dataIncomingMsg          chan Message
+	receiveMessageQueue      []Message
+	unAckMessage             map[Message]int
+	readTimerReset           chan int
+	writer                   writerWithWindow
+	closing                  bool
+	cmdReadNewestMessage     chan int
+	dataNewestMessage        chan Message
+	cmdQuitReadRoutine       chan int
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -53,74 +49,40 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		connectionId:             0,
 		nextSequenceNumber:       0,
 		remoteNextSequenceNumber: 0,
-		//closed:                   false,
-		remoteHost:      hostport,
-		params:          *params,
-		readTimerReset:  make(chan int),
-		clientClose:     make(chan int),
-		fullyClosedDown: make(chan error),
-		receiveMsg:      make(chan Message),
-		//writeMsg:                 make(chan Message),
-		//writeClose:               make(chan int),
-		//writeWindow:              make(chan []byte, params.WindowSize),
-		receiveMessageQueue:  nil,
-		unAckedMessage:       make(map[Message]int),
-		cmdReadNewestMessage: make(chan int),
-		dataNewestMessage:    make(chan Message),
+		remoteHost:               hostport,
+		params:                   *params,
+		readTimerReset:           make(chan int),
+		cmdClientClose:           make(chan int),
+		clientHasFullyClosedDown: make(chan error),
+		dataIncomingMsg:          make(chan Message),
+		receiveMessageQueue:      nil,
+		unAckMessage:             make(map[Message]int),
+		cmdReadNewestMessage:     make(chan int),
+		dataNewestMessage:        make(chan Message),
+		cmdQuitReadRoutine:       make(chan int),
 	}
-	conn, err := lspnet.DialUDP(hostport, nil, &ret.address)
+	//establish UDP connection to server
+	conn, err := lspnet.DialUDP(hostport, nil, &ret.remoteAddress)
 	if err != nil {
 		fmt.Println(err.Error())
 		return nil, err
 	}
+	//prepare protocol connection message
 	msg, err := json.Marshal(*NewConnect())
 	checkError(err)
-
-	err = ret.doWithEpoch(func(result chan error) {
-		_, err := conn.WriteToUDP(msg, &ret.address)
-		if err != nil {
-			result <- err
-			return
-		}
-		buff := make([]byte, 1024)
-		readCnt := 0
-		readCnt, _, err = conn.ReadFromUDP(buff)
-		checkError(err)
-		ack := Message{}
-		json.Unmarshal(buff[:readCnt], &ack)
-		if !ret.verify(ack) || ack.Type != MsgAck {
-			result <- errors.New("invalid ack message")
-			return
-		}
-		ret.mtx.Lock()
-		//in case of n connection msg sent and receive n ack simultaneously
-		//server will assign only one connection id to one port
-		//the later connection msg receive from the same port will be ignored and return ack with -1(I picked this value)
-		//the client may receive acks of previous sent connection requests at the same time with many connectId == -1
-		//the only one above zero will be the real connection id
-		//if there is a bit flip in incoming msg, this should be detected in other mechanism
-		//mutex should serves as synchronization point. inside this section the current co routine should see the changes
-		//of others made to the connection id field. an atomic field may be better than this mutex approach. in case of
-		//heavy contention this will be a significant bottle neck, I think.
-		//co routines making connection will die eventually when return from this procedure without dangling or doing damage.
-		if ret.connectionId == 0 && ack.ConnID != 0 {
-			ret.connectionId = ack.ConnID
-		}
-		ret.mtx.Unlock()
-		result <- nil
-		return
-	})
-	if err != nil {
+	//fire up read routine
+	go ret.readSocket(ret.cmdQuitReadRoutine)
+	//send connection message and wait for server's reply
+	err = protocolConnect(msg, &ret)
+	if err != nil{
+		fmt.Println(err.Error())
 		return nil, err
 	}
-	//this is the main event loop of a client. further abstraction may be applied.
-	//the basic incoming input are connection read, write and time out.
-	//and also close from client driver application
 
 	writerClosed := make(chan error)
-	writer := newWriterWithWindow(params.WindowSize, *conn, ret.address, writerClosed)
+	writer := newWriterWithWindow(params.WindowSize, *conn, ret.remoteAddress, writerClosed)
 	ret.writer = writer
-	go ret.readSocket(*conn)
+	go ret.readSocket(ret.cmdQuitReadRoutine)
 	go func() {
 		timeOutCntLeft := ret.params.EpochLimit
 		timeOut := time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
@@ -128,10 +90,10 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		reqReadMsg := false
 		for {
 			select {
-			case <-ret.clientClose:
+			case <-ret.cmdClientClose:
 				ret.closing = true
 				writer.close()
-			case receiveMsg := <-ret.receiveMsg:
+			case receiveMsg := <-ret.dataIncomingMsg:
 				//validate
 				ret.verify(receiveMsg)
 				//update epoch timeout count
@@ -149,7 +111,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 			case <-timeOut:
 				timeOutCntLeft--
 				if timeOutCntLeft == 0 {
-					ret.clientClose <- 1
+					ret.cmdClientClose <- 1
 				}
 				if receiveCntInThisEpoch == 0 {
 					//resend ack
@@ -158,7 +120,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				// resend that packet
 				writer.resend()
 			case err := <-writerClosed:
-				ret.fullyClosedDown <- err
+				ret.clientHasFullyClosedDown <- err
 			case <-ret.cmdReadNewestMessage:
 				reqReadMsg = true
 				if len(ret.receiveMessageQueue) > 0 {
@@ -215,7 +177,7 @@ func (c *client) ConnID() int {
 func (c *client) Read() ([]byte, error) {
 	c.cmdReadNewestMessage <- 1
 	msg := <-c.dataNewestMessage
-	return encode(msg), errors.New("not yet implemented")
+	return encode(msg), nil
 }
 
 func (c *client) Write(payload []byte) error {
@@ -231,8 +193,8 @@ func (c *client) Write(payload []byte) error {
 }
 
 func (c *client) Close() error {
-	c.clientClose <- 1
-	return <-c.fullyClosedDown
+	c.cmdClientClose <- 1
+	return <-c.clientHasFullyClosedDown
 }
 
 func checkError(err error) {
@@ -246,24 +208,39 @@ func checkError(err error) {
 //this should be a typical routine / building block as there is no async/no blocking io in golang
 //select case/default is the only way to express non blocking io.
 //this routine is shutdown by client on conn.Close()
-func (c *client) readSocket(conn lspnet.UDPConn) {
+func (c *client) readSocket(endThisRoutine chan int) {
+	conn := c.connection
 	for {
-		buffer := make([]byte, 1024)
-		n, _, err := conn.ReadFromUDP(buffer)
-		//do I have to branch on eof and error?
-		//if eof is received, it means that peer will not send any message and read routine can terminate.
-		//but I can still send message as the current client is not closed.
-		//if other error is encountered, it means that the connection is broken and should be shutdown.
-		//when it comes to lsp, it's on a upper layer other then socket connection layer.
-		if err != nil {
-			fmt.Println(err.Error())
-			//should tear down every thing
-			c.Close()
+		select {
+		case <-endThisRoutine:
 			return
+		default:
+			buffer := make([]byte, 1024)
+			n, _, err := conn.ReadFromUDP(buffer)
+			if err != nil {
+				fmt.Println(err.Error())
+				return
+			}
+			msg := Message{}
+			decode(buffer[:n], &msg)
+			c.dataIncomingMsg <- msg
 		}
-		msg := Message{}
-		decode(buffer[:n], &msg)
-		c.receiveMsg <- msg
+		//buffer := make([]byte, 1024)
+		//n, _, err := conn.ReadFromUDP(buffer)
+		////do I have to branch on eof and error?
+		////if eof is received, it means that peer will not send any message and read routine can terminate.
+		////but I can still send message as the current client is not closed.
+		////if other error is encountered, it means that the connection is broken and should be shutdown.
+		////when it comes to lsp, it's on a upper layer other then socket connection layer.
+		//if err != nil {
+		//	fmt.Println(err.Error())
+		//	//should tear down every thing
+		//	c.Close()
+		//	return
+		//}
+		//msg := Message{}
+		//decode(buffer[:n], &msg)
+		//c.dataIncomingMsg <- msg
 	}
 }
 
@@ -368,4 +345,23 @@ func encode(from interface{}) []byte {
 	ret, err := json.Marshal(from)
 	checkError(err)
 	return ret
+}
+
+func protocolConnect(message []byte, c *client) error {
+	//repeat several times to send connection message until time out or receive an ack from server
+	c.connection.WriteToUDP(message, &c.remoteAddress)
+	for i := 0; i < c.params.EpochLimit; i++ {
+		timeOut := time.After(time.Duration(c.params.EpochMillis) * time.Millisecond)
+		select {
+		case <-timeOut:
+			//resend connection msg
+			c.connection.WriteToUDP(message, &c.remoteAddress)
+		case msg := <-c.dataIncomingMsg:
+			if c.verify(msg) && msg.Type == MsgAck{
+				c.connectionId = msg.ConnID
+				return nil
+			}
+		}
+	}
+	return errors.New("connection abort : time out : wait server's ack for connection message")
 }
