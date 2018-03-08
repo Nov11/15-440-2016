@@ -13,25 +13,26 @@ import (
 )
 
 type client struct {
-	connectionId             int
-	connection               lspnet.UDPConn
-	remoteAddress            lspnet.UDPAddr
-	nextSequenceNumber       int
-	remoteNextSequenceNumber int
-	remoteHost               string
-	params                   Params
-	mtx                      sync.Mutex
-	cmdClientClose           chan int
-	clientHasFullyClosedDown chan error
-	dataIncomingMsg          chan Message
-	receiveMessageQueue      []Message
-	unAckMessage             map[Message]int
-	readTimerReset           chan int
-	writer                   writerWithWindow
-	closing                  bool
-	cmdReadNewestMessage     chan int
-	dataNewestMessage        chan Message
-	cmdQuitReadRoutine       chan int
+	connectionId                int
+	connection                  lspnet.UDPConn
+	remoteAddress               lspnet.UDPAddr
+	nextSequenceNumber          int
+	remoteNextSequenceNumber    int
+	remoteHost                  string
+	params                      Params
+	mtx                         sync.Mutex
+	cmdClientClose              chan int
+	clientHasFullyClosedDown    chan error
+	dataIncomingMsg             chan Message
+	receiveMessageQueue         []Message
+	unAckMessage                map[Message]int
+	readTimerReset              chan int
+	writer                      writerWithWindow
+	closing                     bool
+	cmdReadNewestMessage        chan int
+	dataNewestMessage           chan Message
+	cmdQuitReadRoutine          chan int
+	previousSeqNumReturnedToApp int
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -46,20 +47,21 @@ type client struct {
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, params *Params) (Client, error) {
 	ret := client{
-		connectionId:             0,
-		nextSequenceNumber:       0,
-		remoteNextSequenceNumber: 0,
-		remoteHost:               hostport,
-		params:                   *params,
-		readTimerReset:           make(chan int),
-		cmdClientClose:           make(chan int),
-		clientHasFullyClosedDown: make(chan error),
-		dataIncomingMsg:          make(chan Message),
-		receiveMessageQueue:      nil,
-		unAckMessage:             make(map[Message]int),
-		cmdReadNewestMessage:     make(chan int),
-		dataNewestMessage:        make(chan Message),
-		cmdQuitReadRoutine:       make(chan int),
+		connectionId:                0,
+		nextSequenceNumber:          0,
+		remoteNextSequenceNumber:    0,
+		remoteHost:                  hostport,
+		params:                      *params,
+		readTimerReset:              make(chan int),
+		cmdClientClose:              make(chan int, 2),
+		clientHasFullyClosedDown:    make(chan error),
+		dataIncomingMsg:             make(chan Message),
+		receiveMessageQueue:         nil,
+		unAckMessage:                make(map[Message]int),
+		cmdReadNewestMessage:        make(chan int),
+		dataNewestMessage:           make(chan Message),
+		cmdQuitReadRoutine:          make(chan int),
+		previousSeqNumReturnedToApp: -1,
 	}
 	//establish UDP connection to server
 	conn, err := lspnet.DialUDP(hostport, nil, &ret.remoteAddress)
@@ -74,59 +76,77 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	go ret.readSocket(ret.cmdQuitReadRoutine)
 	//send connection message and wait for server's reply
 	err = protocolConnect(msg, &ret)
-	if err != nil{
+	if err != nil {
 		fmt.Println(err.Error())
 		return nil, err
 	}
 
 	writerClosed := make(chan error)
-	writer := newWriterWithWindow(params.WindowSize, *conn, ret.remoteAddress, writerClosed)
+	writer := newWriterWithWindow(params.WindowSize, conn, &ret.remoteAddress, writerClosed)
 	ret.writer = writer
-	go ret.readSocket(ret.cmdQuitReadRoutine)
 	go func() {
 		timeOutCntLeft := ret.params.EpochLimit
 		timeOut := time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
-		receiveCntInThisEpoch := 0
+		receivedMessageCountInThisEpoch := 0
 		reqReadMsg := false
 		for {
 			select {
 			case <-ret.cmdClientClose:
-				ret.closing = true
-				writer.close()
+				if ret.closing == false {
+					ret.closing = true
+					writer.close()
+				}
 			case receiveMsg := <-ret.dataIncomingMsg:
 				//validate
-				ret.verify(receiveMsg)
+				if !ret.verify(receiveMsg) {
+					fmt.Printf("msg : %v mal formatted", receiveMsg)
+					continue
+				}
 				//update epoch timeout count
-				receiveCntInThisEpoch++
+				receivedMessageCountInThisEpoch++
 				//push to receiveMessage queue
-				ret.receiveMessageQueue = append(ret.receiveMessageQueue, receiveMsg)
+				ret.appendNewReceivedMessage(&receiveMsg)
 				if receiveMsg.Type == MsgAck {
 					writer.getAck(receiveMsg.SeqNum)
+				} else if receiveMsg.Type == MsgData {
+					ack := NewAck(ret.connectionId, ret.nextSequenceNumber)
+					ret.nextSequenceNumber++
+					writer.add(ack)
 				}
 				if reqReadMsg {
-					reqReadMsg = false
-					ret.dataNewestMessage <- ret.receiveMessageQueue[0]
-					ret.receiveMessageQueue = ret.receiveMessageQueue[1:]
+					nextMsg := ret.getNextMessage()
+					if nextMsg != nil {
+						reqReadMsg = false
+						ret.dataNewestMessage <- *nextMsg
+					}
 				}
 			case <-timeOut:
-				timeOutCntLeft--
-				if timeOutCntLeft == 0 {
-					ret.cmdClientClose <- 1
+				if receivedMessageCountInThisEpoch != 0 {
+					timeOutCntLeft = ret.params.EpochLimit
+				} else {
+					timeOutCntLeft--
+					if timeOutCntLeft == 0 {
+						fmt.Println("client closing : no data message after epoch limit exceeded : ")
+						ret.cmdClientClose <- 1
+					}
 				}
-				if receiveCntInThisEpoch == 0 {
+				if receivedMessageCountInThisEpoch == 0 {
 					//resend ack
+					zeroAck := NewAck(ret.connectionId, 0)
+					writer.add(zeroAck)
 				}
 				// if there is msg that hasn't receive ack
 				// resend that packet
 				writer.resend()
 			case err := <-writerClosed:
 				ret.clientHasFullyClosedDown <- err
+				return
 			case <-ret.cmdReadNewestMessage:
 				reqReadMsg = true
-				if len(ret.receiveMessageQueue) > 0 {
+				msg := ret.getNextMessage()
+				if msg != nil {
 					reqReadMsg = false
-					ret.dataNewestMessage <- ret.receiveMessageQueue[0]
-					ret.receiveMessageQueue = ret.receiveMessageQueue[1:]
+					ret.dataNewestMessage <- *msg
 				}
 			}
 		}
@@ -134,21 +154,50 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	return &ret, nil
 }
 
-func (c *client) doWithEpoch(work func(chan error)) error {
-	for tried := 0; tried < c.params.EpochLimit; tried++ {
-		timeOut := time.After(time.Duration(c.params.EpochMillis) * time.Millisecond)
-		channel := make(chan error)
-		go func() {
-			work(channel)
-		}()
-		select {
-		case <-timeOut:
-		case err := <-channel:
-			return err
+//maintain message in seq order. cause application needs message to be read in serial order
+func (c *client) appendNewReceivedMessage(msg *Message) {
+	for i := 0; i < len(c.receiveMessageQueue); i++ {
+		if c.receiveMessageQueue[i].SeqNum == msg.SeqNum {
+			return
+		} else if c.receiveMessageQueue[i].SeqNum > msg.SeqNum {
+			tmp := c.receiveMessageQueue[i:]
+			c.receiveMessageQueue = append(c.receiveMessageQueue[:i], *msg)
+			c.receiveMessageQueue = append(c.receiveMessageQueue, tmp...)
+			return
 		}
 	}
-	return errors.New("time out")
+	c.receiveMessageQueue = append(c.receiveMessageQueue, *msg)
 }
+
+//return next message if already received that message, or return nil
+func (c *client) getNextMessage() *Message {
+	if len(c.receiveMessageQueue) == 0 {
+		return nil
+	}
+	if c.receiveMessageQueue[0].SeqNum == c.previousSeqNumReturnedToApp+1 {
+		ret := c.receiveMessageQueue[0]
+		c.receiveMessageQueue = c.receiveMessageQueue[1:]
+		c.previousSeqNumReturnedToApp++
+		return &ret
+	}
+	return nil
+}
+
+//func (c *client) doWithEpoch(work func(chan error)) error {
+//	for tried := 0; tried < c.params.EpochLimit; tried++ {
+//		timeOut := time.After(time.Duration(c.params.EpochMillis) * time.Millisecond)
+//		channel := make(chan error)
+//		go func() {
+//			work(channel)
+//		}()
+//		select {
+//		case <-timeOut:
+//		case err := <-channel:
+//			return err
+//		}
+//	}
+//	return errors.New("time out")
+//}
 
 func (c *client) verify(msg Message) bool {
 	if msg.Type != MsgConnect && msg.Type != MsgData && msg.Type != MsgAck {
@@ -225,22 +274,6 @@ func (c *client) readSocket(endThisRoutine chan int) {
 			decode(buffer[:n], &msg)
 			c.dataIncomingMsg <- msg
 		}
-		//buffer := make([]byte, 1024)
-		//n, _, err := conn.ReadFromUDP(buffer)
-		////do I have to branch on eof and error?
-		////if eof is received, it means that peer will not send any message and read routine can terminate.
-		////but I can still send message as the current client is not closed.
-		////if other error is encountered, it means that the connection is broken and should be shutdown.
-		////when it comes to lsp, it's on a upper layer other then socket connection layer.
-		//if err != nil {
-		//	fmt.Println(err.Error())
-		//	//should tear down every thing
-		//	c.Close()
-		//	return
-		//}
-		//msg := Message{}
-		//decode(buffer[:n], &msg)
-		//c.dataIncomingMsg <- msg
 	}
 }
 
@@ -261,7 +294,7 @@ func writeSocket(conn lspnet.UDPConn, addr *lspnet.UDPAddr, sendMsg chan Message
 }
 
 func (www *writerWithWindow) writeMessage(message Message) {
-	www.conn.WriteToUDP(encode(message), &www.address)
+	www.conn.WriteToUDP(encode(message), www.address)
 }
 
 type writerWithWindow struct {
@@ -270,12 +303,12 @@ type writerWithWindow struct {
 	windowSize     int
 	shutdown       chan int
 	newMessage     chan Message
-	conn           lspnet.UDPConn
-	address        lspnet.UDPAddr
+	conn           *lspnet.UDPConn
+	address        *lspnet.UDPAddr
 	returnChannel  chan error
 }
 
-func newWriterWithWindow(windowSize int, conn lspnet.UDPConn, addr lspnet.UDPAddr, result chan error) writerWithWindow {
+func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPAddr, result chan error) writerWithWindow {
 	ret := writerWithWindow{
 		windowSize:    windowSize,
 		shutdown:      make(chan int),
@@ -355,9 +388,12 @@ func protocolConnect(message []byte, c *client) error {
 		select {
 		case <-timeOut:
 			//resend connection msg
+			if i+1 == c.params.EpochLimit {
+				break
+			}
 			c.connection.WriteToUDP(message, &c.remoteAddress)
 		case msg := <-c.dataIncomingMsg:
-			if c.verify(msg) && msg.Type == MsgAck{
+			if c.verify(msg) && msg.Type == MsgAck {
 				c.connectionId = msg.ConnID
 				return nil
 			}
