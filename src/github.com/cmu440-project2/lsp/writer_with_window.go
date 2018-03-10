@@ -1,0 +1,108 @@
+package lsp
+
+import (
+	"github.com/cmu440-project2/lspnet"
+	"fmt"
+	"errors"
+)
+
+type writerWithWindow struct {
+	pendingMessage []Message
+	needAck        int
+	windowSize     int
+	cmdShutdown    chan CloseCmd
+	newMessage     chan Message
+	conn           *lspnet.UDPConn
+	remoteAddress  *lspnet.UDPAddr
+	returnChannel  chan error
+}
+
+func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPAddr, result chan error) writerWithWindow {
+	ret := writerWithWindow{
+		windowSize:    windowSize,
+		cmdShutdown:   make(chan CloseCmd),
+		newMessage:    make(chan Message),
+		conn:          conn,
+		remoteAddress: addr,
+		returnChannel: result,
+	}
+	return ret
+}
+
+func (www *writerWithWindow) start() {
+	go func() {
+		var err error
+		defer func() { www.returnChannel <- err }()
+		stop := false
+		for !stop && len(www.pendingMessage) == 0 {
+			select {
+			case cmd := <-www.cmdShutdown:
+				stop = true
+				if cmd.reason != "" {
+					err = errors.New(cmd.reason)
+					www.pendingMessage = nil
+				} else {
+					www.windowSize = 99999
+				}
+			case msg := <-www.newMessage:
+				if stop == true {
+					continue
+				}
+				www.pendingMessage = append(www.pendingMessage, msg)
+			default:
+				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize {
+					err := www.writeMessage(www.pendingMessage[www.needAck])
+					if err != nil {
+						str := err.Error() + ": close writer"
+						fmt.Println(str)
+						cmd := CloseCmd{reason: str}
+						go func() { www.cmdShutdown <- cmd }()
+						break
+					}
+					www.needAck++
+				}
+			}
+		}
+
+	}()
+}
+func (www *writerWithWindow) writeMessage(message Message) error {
+	_, err := www.conn.WriteToUDP(encode(message), www.remoteAddress)
+	return err
+}
+func (www *writerWithWindow) add(msg *Message) {
+	www.pendingMessage = append(www.pendingMessage, *msg)
+}
+
+func (www *writerWithWindow) getAck(number int) {
+	www.needAck--
+	for i := 0; i < www.windowSize; i++ {
+		if www.pendingMessage[i].SeqNum == number {
+			www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
+			break
+		}
+	}
+}
+
+func (www *writerWithWindow) resend() {
+	for i := 0; i < www.needAck; i++ {
+		err := www.writeMessage(www.pendingMessage[i])
+		if err != nil {
+			cmd := CloseCmd{reason: err.Error()}
+			go func() { www.cmdShutdown <- cmd }()
+			break
+		}
+	}
+}
+
+func (www *writerWithWindow) close() {
+	www.cmdShutdown <- 1
+}
+
+func (www *writerWithWindow) resultChannel() chan error {
+	return www.returnChannel
+}
+
+func (www *writerWithWindow) forceClose() {
+
+}
