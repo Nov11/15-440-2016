@@ -27,7 +27,6 @@ type client struct {
 	unAckMessage             map[Message]int
 	readTimerReset           chan int
 	writer                   writerWithWindow
-	closing                  bool
 	closed                   bool
 	closeReason              string
 	cmdReadNewestMessage     chan int
@@ -93,9 +92,9 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		for {
 			select {
 			case cmd := <-ret.cmdClientClose:
-				if ret.closing == false {
+				if ret.closed == false {
 					ret.closeReason = cmd.reason
-					ret.closing = true
+					ret.closed = true
 					writer.close()
 				}
 			case receiveMsg := <-ret.dataIncomingMsg:
@@ -144,6 +143,9 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				// resend that packet
 				writer.resend()
 			case err := <-writerClosed:
+				if ret.closed == false {
+					go func() { ret.cmdClientClose <- CloseCmd{reason: err.Error()} }()
+				}
 				ret.clientHasFullyClosedDown <- err
 				ret.closed = true
 				return
@@ -231,7 +233,10 @@ func (c *client) Read() ([]byte, error) {
 }
 
 func (c *client) Write(payload []byte) error {
-	if c.closing {
+	c.mtx.Lock()
+	closed := c.closed
+	c.mtx.Unlock()
+	if closed {
 		return errors.New("client is closing. refuse sending new packets")
 	}
 	connId := c.connectionId

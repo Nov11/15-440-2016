@@ -11,7 +11,7 @@ type writerWithWindow struct {
 	needAck        int
 	windowSize     int
 	cmdShutdown    chan CloseCmd
-	newMessage     chan Message
+	newMessage     chan *Message
 	conn           *lspnet.UDPConn
 	remoteAddress  *lspnet.UDPAddr
 	returnChannel  chan error
@@ -21,7 +21,7 @@ func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPA
 	ret := writerWithWindow{
 		windowSize:    windowSize,
 		cmdShutdown:   make(chan CloseCmd),
-		newMessage:    make(chan Message),
+		newMessage:    make(chan *Message),
 		conn:          conn,
 		remoteAddress: addr,
 		returnChannel: result,
@@ -48,7 +48,7 @@ func (www *writerWithWindow) start() {
 				if stop == true {
 					continue
 				}
-				www.pendingMessage = append(www.pendingMessage, msg)
+				www.pendingMessage = append(www.pendingMessage, *msg)
 			default:
 				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize {
 					err := www.writeMessage(www.pendingMessage[www.needAck])
@@ -71,7 +71,7 @@ func (www *writerWithWindow) writeMessage(message Message) error {
 	return err
 }
 func (www *writerWithWindow) add(msg *Message) {
-	www.pendingMessage = append(www.pendingMessage, *msg)
+	www.newMessage <- msg
 }
 
 func (www *writerWithWindow) getAck(number int) {
@@ -96,7 +96,8 @@ func (www *writerWithWindow) resend() {
 }
 
 func (www *writerWithWindow) close() {
-	www.cmdShutdown <- 1
+	cmd := CloseCmd{}
+	www.cmdShutdown <- cmd
 }
 
 func (www *writerWithWindow) resultChannel() chan error {
