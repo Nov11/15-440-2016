@@ -3,13 +3,12 @@
 package lsp
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/cmu440-project2/lspnet"
-	"os"
 	"sync"
 	"time"
+	"io"
 )
 
 type client struct {
@@ -21,7 +20,7 @@ type client struct {
 	remoteHost               string
 	params                   Params
 	mtx                      sync.Mutex
-	cmdClientClose           chan int
+	cmdClientClose           chan CloseCmd
 	clientHasFullyClosedDown chan error
 	dataIncomingMsg          chan Message
 	receiveMessageQueue      []Message
@@ -55,7 +54,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		remoteHost:               hostport,
 		params:                   *params,
 		readTimerReset:           make(chan int),
-		cmdClientClose:           make(chan int, 2),
+		cmdClientClose:           make(chan CloseCmd),
 		clientHasFullyClosedDown: make(chan error),
 		dataIncomingMsg:          make(chan Message),
 		receiveMessageQueue:      nil,
@@ -72,8 +71,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		return nil, err
 	}
 	//prepare protocol connection message
-	msg, err := json.Marshal(*NewConnect())
-	checkError(err)
+	msg := encode(*NewConnect())
 	//fire up read routine
 	go ret.readSocket()
 	//send connection message and wait for server's reply
@@ -85,6 +83,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 
 	writerClosed := make(chan error)
 	writer := newWriterWithWindow(params.WindowSize, conn, &ret.remoteAddress, writerClosed)
+	writer.start()
 	ret.writer = writer
 	go func() {
 		timeOutCntLeft := ret.params.EpochLimit
@@ -93,9 +92,9 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		reqReadMsg := false
 		for {
 			select {
-			case <-ret.cmdClientClose:
+			case cmd := <-ret.cmdClientClose:
 				if ret.closing == false {
-					ret.closeReason = "explicitly close connection"
+					ret.closeReason = cmd.reason
 					ret.closing = true
 					writer.close()
 				}
@@ -130,9 +129,10 @@ func NewClient(hostport string, params *Params) (Client, error) {
 					timeOutCntLeft--
 					if timeOutCntLeft == 0 {
 						fmt.Println("client closing : no data message after epoch limit exceeded : ")
-						ret.cmdClientClose <- 1
-						ret.closing = true
-						ret.closeReason = "close due to time out"
+						cmd := CloseCmd{reason: "no data message received after epoch limit exceeded"}
+						go func() {
+							ret.cmdClientClose <- cmd
+						}()
 					}
 				}
 				if receivedMessageCountInThisEpoch == 0 {
@@ -189,22 +189,6 @@ func (c *client) getNextMessage() *Message {
 	return nil
 }
 
-//func (c *client) doWithEpoch(work func(chan error)) error {
-//	for tried := 0; tried < c.params.EpochLimit; tried++ {
-//		timeOut := time.After(time.Duration(c.params.EpochMillis) * time.Millisecond)
-//		channel := make(chan error)
-//		go func() {
-//			work(channel)
-//		}()
-//		select {
-//		case <-timeOut:
-//		case err := <-channel:
-//			return err
-//		}
-//	}
-//	return errors.New("time out")
-//}
-
 func (c *client) verify(msg Message) bool {
 	if msg.Type != MsgConnect && msg.Type != MsgData && msg.Type != MsgAck {
 		return false
@@ -231,10 +215,16 @@ func (c *client) ConnID() int {
 
 //how to read message while bg routine is closing or just shutdown ?
 //at that time there's no routine exists to wait on cmd channel
+//close all cmd channel before
 func (c *client) Read() ([]byte, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("cmd channel closed already")
+		}
+	}()
 	c.cmdReadNewestMessage <- 1
-	msg := <-c.dataNewestMessage
-	if msg != nil {
+	msg, ok := <-c.dataNewestMessage
+	if ok == true {
 		return encode(*msg), nil
 	}
 	return nil, errors.New(c.closeReason)
@@ -253,155 +243,77 @@ func (c *client) Write(payload []byte) error {
 }
 
 func (c *client) Close() error {
-	c.cmdClientClose <- 1
-	return <-c.clientHasFullyClosedDown
-}
-
-func checkError(err error) {
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
-		os.Exit(1)
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("cmd channel closed already")
+		}
+	}()
+	cmd := CloseCmd{reason: "user explicitly close client"}
+	c.cmdClientClose <- cmd
+	_, err := <-c.clientHasFullyClosedDown
+	if err {
+		return err
 	}
+	return nil
 }
 
-//this is for reading
-//this should be a typical routine / building block as there is no async/no blocking io in golang
-//select case/default is the only way to express non blocking io.
-//this routine is shutdown by client on conn.Close()
 func (c *client) readSocket() {
 	conn := c.connection
 	for {
-		//select {
-		////case <-c.cmdQuitReadRoutine:
-		////	return
-		//default:
 		buffer := make([]byte, 1024)
 		n, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			fmt.Println(err.Error())
-			return
+			if err != io.EOF {
+				//connection is lost. client should close
+
+			} else {
+				//peer will never send any more messages include lsp' ack
+				//any thing client send will be in vain
+				//client should shutdown itself
+
+			}
+			//shutdown client without flushing pending messages
+
 		}
 		msg := Message{}
 		decode(buffer[:n], &msg)
 		c.dataIncomingMsg <- msg
-		//}
 	}
 }
 
-func (c *client) stopReadingSocket() {
+func (c *client) cleanUp() {
+	//if reader routine is still running, it will wake up and die.
 	c.connection.Close()
-	//c.cmdQuitReadRoutine <- 1
+	//
 }
 
-func writeSocket(conn lspnet.UDPConn, addr *lspnet.UDPAddr, sendMsg chan Message, explicitClose chan bool) {
+func (c *client) writeSocket(addr *lspnet.UDPAddr, sendMsg chan Message, explicitClose chan bool) {
 	for {
 		select {
 		case msg := <-sendMsg:
 			bytes := encode(msg)
-			conn.WriteToUDP(bytes, addr)
+			_, err := c.connection.WriteToUDP(bytes, addr)
+			if err != nil {
+				return
+			}
 		case <-explicitClose:
 			return
 		}
 	}
 }
 
-func (www *writerWithWindow) writeMessage(message Message) {
-	www.conn.WriteToUDP(encode(message), www.address)
-}
-
-type writerWithWindow struct {
-	pendingMessage []Message
-	needAck        int
-	windowSize     int
-	shutdown       chan int
-	newMessage     chan Message
-	conn           *lspnet.UDPConn
-	address        *lspnet.UDPAddr
-	returnChannel  chan error
-}
-
-func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPAddr, result chan error) writerWithWindow {
-	ret := writerWithWindow{
-		windowSize:    windowSize,
-		shutdown:      make(chan int),
-		newMessage:    make(chan Message),
-		conn:          conn,
-		address:       addr,
-		returnChannel: result,
-	}
-	return ret
-}
-
-func (www *writerWithWindow) start(toMsg chan Message) {
-	go func() {
-		stop := false
-		for !stop && len(www.pendingMessage) == 0 {
-			select {
-			case <-www.shutdown:
-				stop = true
-				www.windowSize = 99999
-			case msg := <-www.newMessage:
-				www.pendingMessage = append(www.pendingMessage, msg)
-			default:
-				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize {
-					toMsg <- www.pendingMessage[www.needAck]
-					www.needAck++
-				}
-			}
-		}
-		www.returnChannel <- nil
-	}()
-}
-
-func (www *writerWithWindow) add(msg *Message) {
-	www.pendingMessage = append(www.pendingMessage, *msg)
-}
-
-func (www *writerWithWindow) getAck(number int) {
-	www.needAck--
-	for i := 0; i < www.windowSize; i++ {
-		if www.pendingMessage[i].SeqNum == number {
-			www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
-			break
-		}
-	}
-}
-
-func (www *writerWithWindow) resend() {
-	for i := 0; i < www.needAck; i++ {
-		www.writeMessage(www.pendingMessage[i])
-	}
-}
-
-func (www *writerWithWindow) close() {
-	www.shutdown <- 1
-}
-
-func (www *writerWithWindow) resultChannel() chan error {
-	return www.returnChannel
-}
-
-func decode(raw []byte, to interface{}) {
-	err := json.Unmarshal(raw, to)
-	checkError(err)
-}
-
-func encode(from interface{}) []byte {
-	ret, err := json.Marshal(from)
-	checkError(err)
-	return ret
-}
-
 func protocolConnect(message []byte, c *client) error {
 	//repeat several times to send connection message until time out or receive an ack from server
 	c.connection.WriteToUDP(message, &c.remoteAddress)
+DONE:
 	for i := 0; i < c.params.EpochLimit; i++ {
 		timeOut := time.After(time.Duration(c.params.EpochMillis) * time.Millisecond)
 		select {
 		case <-timeOut:
 			//resend connection msg
 			if i+1 == c.params.EpochLimit {
-				break
+				break DONE
 			}
 			c.connection.WriteToUDP(message, &c.remoteAddress)
 		case msg := <-c.dataIncomingMsg:
