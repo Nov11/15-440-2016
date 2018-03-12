@@ -6,13 +6,13 @@ import (
 	"os"
 )
 
-func decode(raw []byte, to interface{}) {
-	err := json.Unmarshal(raw, to)
+func decode(raw []byte, msg *Message) {
+	err := json.Unmarshal(raw, msg)
 	checkError(err)
 }
 
-func encode(from interface{}) []byte {
-	ret, err := json.Marshal(from)
+func encode(msg *Message) []byte {
+	ret, err := json.Marshal(msg)
 	checkError(err)
 	return ret
 }
@@ -24,6 +24,6 @@ func checkError(err error) {
 	}
 }
 
-type CloseCmd struct{
+type CloseCmd struct {
 	reason string
 }

@@ -24,7 +24,7 @@ type server struct {
 // there was an error resolving or listening on the specified port number.
 func NewServer(port int, params *Params) (Server, error) {
 
-	address, err := lspnet.ResolveUDPAddr("udp", ":"+strconv.Itoa(port))
+	address, err := lspnet.ResolveUDPAddr("udp", "localhost:"+strconv.Itoa(port))
 	checkError(err)
 
 	conn, err := lspnet.ListenUDP("udp", address)

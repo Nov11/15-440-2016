@@ -7,7 +7,7 @@ import (
 )
 
 type writerWithWindow struct {
-	pendingMessage []Message
+	pendingMessage []*Message
 	needAck        int
 	windowSize     int
 	cmdShutdown    chan CloseCmd
@@ -52,7 +52,7 @@ func (www *writerWithWindow) start() {
 				if stop == true {
 					continue
 				}
-				www.pendingMessage = append(www.pendingMessage, *msg)
+				www.pendingMessage = append(www.pendingMessage, msg)
 			case number := <-www.ack:
 				for i := 0; i < www.needAck; i++ {
 					if www.pendingMessage[i].SeqNum == number {
@@ -87,7 +87,7 @@ func (www *writerWithWindow) start() {
 
 	}()
 }
-func (www *writerWithWindow) writeMessage(message Message) error {
+func (www *writerWithWindow) writeMessage(message* Message) error {
 	_, err := www.conn.WriteToUDP(encode(message), www.remoteAddress)
 	return err
 }

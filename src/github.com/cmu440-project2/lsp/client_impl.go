@@ -17,7 +17,6 @@ type client struct {
 	remoteAddress               *lspnet.UDPAddr
 	nextSequenceNumber          int
 	remoteNextSequenceNumber    int
-	remoteHost                  string
 	params                      Params
 	mtx                         sync.Mutex
 	cmdClientClose              chan CloseCmd
@@ -53,35 +52,34 @@ func (c *client) closeChannels() {
 // hostport is a colon-separated string identifying the server's host address
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, params *Params) (Client, error) {
-	ret := client{
-		connectionId:             0,
-		nextSequenceNumber:       0,
-		remoteNextSequenceNumber: 0,
-		remoteHost:               hostport,
-		params:                   *params,
-		readTimerReset:           make(chan int),
-		cmdClientClose:           make(chan CloseCmd),
-		clientHasFullyClosedDown: make(chan error),
-		dataIncomingMsg:          make(chan Message),
-		receiveMessageQueue:      nil,
-		cmdReadNewestMessage:     make(chan int),
-		dataNewestMessage:        make(chan *Message),
-		//cmdQuitReadRoutine:          make(chan int),
-		previousSeqNumReturnedToApp: -1,
-	}
 	address, err := lspnet.ResolveUDPAddr("udp", hostport)
 	if err != nil {
 		return nil, err
 	}
-	ret.remoteAddress = address
 	//establish UDP connection to server
-	conn, err := lspnet.DialUDP(hostport, nil, ret.remoteAddress)
+	conn, err := lspnet.DialUDP("udp", nil, address)
 	if err != nil {
 		fmt.Println(err.Error())
 		return nil, err
 	}
+	ret := client{
+		connectionId:                0,
+		nextSequenceNumber:          0,
+		remoteNextSequenceNumber:    0,
+		params:                      *params,
+		remoteAddress:               address,
+		connection:                  conn,
+		readTimerReset:              make(chan int),
+		cmdClientClose:              make(chan CloseCmd),
+		clientHasFullyClosedDown:    make(chan error),
+		dataIncomingMsg:             make(chan Message),
+		receiveMessageQueue:         nil,
+		cmdReadNewestMessage:        make(chan int),
+		dataNewestMessage:           make(chan *Message),
+		previousSeqNumReturnedToApp: -1,
+	}
 	//prepare protocol connection message
-	msg := encode(*NewConnect())
+	msg := encode(NewConnect())
 	//fire up read routine
 	go ret.readSocket()
 	//send connection message and wait for server's reply
@@ -246,7 +244,7 @@ func (c *client) Read() ([]byte, error) {
 	c.cmdReadNewestMessage <- 1
 	msg, ok := <-c.dataNewestMessage
 	if ok == true {
-		return encode(*msg), nil
+		return encode(msg), nil
 	}
 	return nil, errors.New(c.closeReason)
 }
@@ -309,7 +307,7 @@ func (c *client) cleanUp() {
 	//
 }
 
-func (c *client) writeSocket(addr *lspnet.UDPAddr, sendMsg chan Message, explicitClose chan bool) {
+func (c *client) writeSocket(addr *lspnet.UDPAddr, sendMsg chan *Message, explicitClose chan bool) {
 	for {
 		select {
 		case msg := <-sendMsg:
@@ -326,7 +324,8 @@ func (c *client) writeSocket(addr *lspnet.UDPAddr, sendMsg chan Message, explici
 
 func protocolConnect(message []byte, c *client) error {
 	//repeat several times to send connection message until time out or receive an ack from server
-	c.connection.WriteToUDP(message, c.remoteAddress)
+	//c.connection.WriteToUDP(message, c.remoteAddress)
+	c.connection.Write(message)
 DONE:
 	for i := 0; i < c.params.EpochLimit; i++ {
 		timeOut := time.After(time.Duration(c.params.EpochMillis) * time.Millisecond)
