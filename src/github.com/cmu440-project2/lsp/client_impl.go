@@ -24,15 +24,22 @@ type client struct {
 	clientHasFullyClosedDown chan error
 	dataIncomingMsg          chan Message
 	receiveMessageQueue      []Message
-	unAckMessage             map[Message]int
 	readTimerReset           chan int
 	writer                   writerWithWindow
 	closed                   bool
 	closeReason              string
 	cmdReadNewestMessage     chan int
 	dataNewestMessage        chan *Message
-	//cmdQuitReadRoutine          chan int
 	previousSeqNumReturnedToApp int
+}
+
+func (c *client) closeChannels() {
+	close(c.cmdClientClose)
+	close(c.clientHasFullyClosedDown)
+	close(c.dataIncomingMsg)
+	close(c.readTimerReset)
+	close(c.cmdReadNewestMessage)
+	close(c.dataNewestMessage)
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -57,7 +64,6 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		clientHasFullyClosedDown: make(chan error),
 		dataIncomingMsg:          make(chan Message),
 		receiveMessageQueue:      nil,
-		unAckMessage:             make(map[Message]int),
 		cmdReadNewestMessage:     make(chan int),
 		dataNewestMessage:        make(chan *Message),
 		//cmdQuitReadRoutine:          make(chan int),
@@ -95,7 +101,13 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				if ret.closed == false {
 					ret.closeReason = cmd.reason
 					ret.closed = true
-					writer.close()
+					if ret.closeReason == "" {
+						writer.close()
+					} else {
+						ret.connection.Close()
+						ret.closeChannels()
+						return
+					}
 				}
 			case receiveMsg := <-ret.dataIncomingMsg:
 				//validate
@@ -145,10 +157,12 @@ func NewClient(hostport string, params *Params) (Client, error) {
 			case err := <-writerClosed:
 				if ret.closed == false {
 					go func() { ret.cmdClientClose <- CloseCmd{reason: err.Error()} }()
+				} else {
+					ret.connection.Close()
+					ret.clientHasFullyClosedDown <- err
+					ret.closeChannels()
+					return
 				}
-				ret.clientHasFullyClosedDown <- err
-				ret.closed = true
-				return
 			case <-ret.cmdReadNewestMessage:
 				reqReadMsg = true
 				msg := ret.getNextMessage()
@@ -253,12 +267,9 @@ func (c *client) Close() error {
 			fmt.Println("cmd channel closed already")
 		}
 	}()
-	cmd := CloseCmd{reason: "user explicitly close client"}
+	cmd := CloseCmd{reason: ""}
 	c.cmdClientClose <- cmd
-	_, err := <-c.clientHasFullyClosedDown
-	if err {
-		return err
-	}
+	<-c.clientHasFullyClosedDown
 	return nil
 }
 

@@ -15,6 +15,8 @@ type writerWithWindow struct {
 	conn           *lspnet.UDPConn
 	remoteAddress  *lspnet.UDPAddr
 	returnChannel  chan error
+	ack            chan int
+	cmdResend      chan int
 }
 
 func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPAddr, result chan error) writerWithWindow {
@@ -25,6 +27,8 @@ func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPA
 		conn:          conn,
 		remoteAddress: addr,
 		returnChannel: result,
+		ack:           make(chan int),
+		cmdResend:     make(chan int),
 	}
 	return ret
 }
@@ -49,6 +53,23 @@ func (www *writerWithWindow) start() {
 					continue
 				}
 				www.pendingMessage = append(www.pendingMessage, *msg)
+			case number := <-www.ack:
+				for i := 0; i < www.needAck; i++ {
+					if www.pendingMessage[i].SeqNum == number {
+						www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
+						www.needAck--
+						break
+					}
+				}
+			case <-www.cmdResend:
+				for i := 0; i < www.needAck; i++ {
+					err := www.writeMessage(www.pendingMessage[i])
+					if err != nil {
+						cmd := CloseCmd{reason: err.Error()}
+						go func() { www.cmdShutdown <- cmd }()
+						break
+					}
+				}
 			default:
 				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize {
 					err := www.writeMessage(www.pendingMessage[www.needAck])
@@ -75,24 +96,11 @@ func (www *writerWithWindow) add(msg *Message) {
 }
 
 func (www *writerWithWindow) getAck(number int) {
-	www.needAck--
-	for i := 0; i < www.windowSize; i++ {
-		if www.pendingMessage[i].SeqNum == number {
-			www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
-			break
-		}
-	}
+	www.ack <- number
 }
 
 func (www *writerWithWindow) resend() {
-	for i := 0; i < www.needAck; i++ {
-		err := www.writeMessage(www.pendingMessage[i])
-		if err != nil {
-			cmd := CloseCmd{reason: err.Error()}
-			go func() { www.cmdShutdown <- cmd }()
-			break
-		}
-	}
+	www.cmdResend <- 1
 }
 
 func (www *writerWithWindow) close() {
@@ -102,8 +110,4 @@ func (www *writerWithWindow) close() {
 
 func (www *writerWithWindow) resultChannel() chan error {
 	return www.returnChannel
-}
-
-func (www *writerWithWindow) forceClose() {
-
 }
