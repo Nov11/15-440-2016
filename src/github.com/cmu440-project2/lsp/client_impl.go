@@ -24,12 +24,13 @@ type client struct {
 	dataIncomingMsg             chan Message
 	receiveMessageQueue         []Message
 	readTimerReset              chan int
-	writer                      writerWithWindow
+	writer                      *writerWithWindow
 	closed                      bool
 	closeReason                 string
 	cmdReadNewestMessage        chan int
 	dataNewestMessage           chan *Message
 	previousSeqNumReturnedToApp int
+	signalWriterClosed          chan error
 }
 
 func (c *client) closeChannels() {
@@ -39,6 +40,7 @@ func (c *client) closeChannels() {
 	close(c.readTimerReset)
 	close(c.cmdReadNewestMessage)
 	close(c.dataNewestMessage)
+	close(c.signalWriterClosed)
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -77,6 +79,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		cmdReadNewestMessage:        make(chan int),
 		dataNewestMessage:           make(chan *Message),
 		previousSeqNumReturnedToApp: -1,
+		signalWriterClosed:          make(chan error),
 	}
 	//prepare protocol connection message
 	msg := encode(NewConnect())
@@ -89,8 +92,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		return nil, err
 	}
 
-	writerClosed := make(chan error)
-	writer := newWriterWithWindow(params.WindowSize, conn, ret.remoteAddress, writerClosed)
+	writer := newWriterWithWindow(params.WindowSize, conn, ret.remoteAddress, ret.signalWriterClosed)
 	writer.start()
 	ret.writer = writer
 	go func() {
@@ -157,7 +159,11 @@ func NewClient(hostport string, params *Params) (Client, error) {
 				// if there is msg that hasn't receive ack
 				// resend that packet
 				writer.resend()
-			case err := <-writerClosed:
+			case err, ok := <-ret.signalWriterClosed:
+				//I never write to this, how can it wake up ?
+				if ok != true{
+
+				}
 				if ret.closed == false {
 					go func() { ret.cmdClientClose <- CloseCmd{reason: err.Error()} }()
 				} else {
@@ -293,7 +299,9 @@ func (c *client) readSocket() {
 
 			}
 			//shutdown client without flushing pending messages
-
+			cmd := CloseCmd{reason: "read from socket returns " + err.Error()}
+			c.cmdClientClose <- cmd
+			return
 		}
 		msg := Message{}
 		decode(buffer[:n], &msg)
@@ -312,7 +320,7 @@ func (c *client) writeSocket(addr *lspnet.UDPAddr, sendMsg chan *Message, explic
 		select {
 		case msg := <-sendMsg:
 			bytes := encode(msg)
-			_, err := c.connection.WriteToUDP(bytes, addr)
+			_, err := c.connection.Write(bytes)
 			if err != nil {
 				return
 			}
@@ -335,7 +343,7 @@ DONE:
 			if i+1 == c.params.EpochLimit {
 				break DONE
 			}
-			c.connection.WriteToUDP(message, c.remoteAddress)
+			c.connection.Write(message)
 		case msg := <-c.dataIncomingMsg:
 			if c.verify(msg) && msg.Type == MsgAck {
 				c.connectionId = msg.ConnID

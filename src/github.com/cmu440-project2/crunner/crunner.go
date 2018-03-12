@@ -55,13 +55,16 @@ func main() {
 
 func runClient(cli lsp.Client) {
 	defer fmt.Println("Exiting...")
+	cnt := 1
 	for {
 		// Get next token from input.
 		fmt.Printf("Client: ")
 		var s string
-		if _, err := fmt.Scan(&s); err != nil {
-			return
-		}
+		s = strconv.Itoa(cnt)
+		cnt++
+		//if _, err := fmt.Scan(&s); err != nil {
+		//	return
+		//}
 		// Send message to server.
 		if err := cli.Write([]byte(s)); err != nil {
 			fmt.Printf("Client %d failed to write to server: %s\n", cli.ConnID(), err)

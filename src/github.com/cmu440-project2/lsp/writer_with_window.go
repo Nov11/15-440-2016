@@ -19,16 +19,16 @@ type writerWithWindow struct {
 	cmdResend      chan int
 }
 
-func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPAddr, result chan error) writerWithWindow {
-	ret := writerWithWindow{
+func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPAddr, signalExit chan error) *writerWithWindow {
+	ret := &writerWithWindow{
 		windowSize:    windowSize,
 		cmdShutdown:   make(chan CloseCmd),
 		newMessage:    make(chan *Message),
 		conn:          conn,
 		remoteAddress: addr,
-		returnChannel: result,
 		ack:           make(chan int),
 		cmdResend:     make(chan int),
+		returnChannel: signalExit,
 	}
 	return ret
 }
@@ -36,7 +36,9 @@ func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPA
 func (www *writerWithWindow) start() {
 	go func() {
 		var err error
-		defer func() { www.returnChannel <- err }()
+		defer func() {
+			www.returnChannel <- err
+		}()
 		stop := false
 		for !stop && len(www.pendingMessage) == 0 {
 			select {
@@ -87,8 +89,8 @@ func (www *writerWithWindow) start() {
 
 	}()
 }
-func (www *writerWithWindow) writeMessage(message* Message) error {
-	_, err := www.conn.WriteToUDP(encode(message), www.remoteAddress)
+func (www *writerWithWindow) writeMessage(message *Message) error {
+	_, err := www.conn.Write(encode(message))
 	return err
 }
 func (www *writerWithWindow) add(msg *Message) {
@@ -106,8 +108,4 @@ func (www *writerWithWindow) resend() {
 func (www *writerWithWindow) close() {
 	cmd := CloseCmd{}
 	www.cmdShutdown <- cmd
-}
-
-func (www *writerWithWindow) resultChannel() chan error {
-	return www.returnChannel
 }
