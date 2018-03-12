@@ -5,11 +5,12 @@ package lsp
 import (
 	"errors"
 	"github.com/cmu440-project2/lspnet"
+	"strconv"
 )
 
 type server struct {
-	address          lspnet.UDPAddr
-	connection       lspnet.UDPConn
+	address          *lspnet.UDPAddr
+	connection       *lspnet.UDPConn
 	nextConnectionId int
 	connectIdList    map[int]lspnet.UDPConn
 	closing          bool
@@ -22,17 +23,20 @@ type server struct {
 // project 0, etc.) and immediately return. It should return a non-nil error if
 // there was an error resolving or listening on the specified port number.
 func NewServer(port int, params *Params) (Server, error) {
-	addr := lspnet.UDPAddr{}
-	conn, err := lspnet.ListenUDP("localhost:"+string(port), &addr)
+
+	address, err := lspnet.ResolveUDPAddr("udp", ":"+strconv.Itoa(port))
+	checkError(err)
+
+	conn, err := lspnet.ListenUDP("udp", address)
 	if err != nil {
 		return nil, err
 	}
-	ret := server{address: addr,
-		connection: *conn,
+	ret := server{
+		address:          address,
+		connection:       conn,
 		nextConnectionId: 0,
-		connectIdList: make(map[int]lspnet.UDPConn),
-		closing: false,}
-
+		connectIdList:    make(map[int]lspnet.UDPConn),
+		closing:          false,}
 	return &ret, nil
 }
 

@@ -12,24 +12,24 @@ import (
 )
 
 type client struct {
-	connectionId             int
-	connection               lspnet.UDPConn
-	remoteAddress            lspnet.UDPAddr
-	nextSequenceNumber       int
-	remoteNextSequenceNumber int
-	remoteHost               string
-	params                   Params
-	mtx                      sync.Mutex
-	cmdClientClose           chan CloseCmd
-	clientHasFullyClosedDown chan error
-	dataIncomingMsg          chan Message
-	receiveMessageQueue      []Message
-	readTimerReset           chan int
-	writer                   writerWithWindow
-	closed                   bool
-	closeReason              string
-	cmdReadNewestMessage     chan int
-	dataNewestMessage        chan *Message
+	connectionId                int
+	connection                  *lspnet.UDPConn
+	remoteAddress               *lspnet.UDPAddr
+	nextSequenceNumber          int
+	remoteNextSequenceNumber    int
+	remoteHost                  string
+	params                      Params
+	mtx                         sync.Mutex
+	cmdClientClose              chan CloseCmd
+	clientHasFullyClosedDown    chan error
+	dataIncomingMsg             chan Message
+	receiveMessageQueue         []Message
+	readTimerReset              chan int
+	writer                      writerWithWindow
+	closed                      bool
+	closeReason                 string
+	cmdReadNewestMessage        chan int
+	dataNewestMessage           chan *Message
 	previousSeqNumReturnedToApp int
 }
 
@@ -69,8 +69,13 @@ func NewClient(hostport string, params *Params) (Client, error) {
 		//cmdQuitReadRoutine:          make(chan int),
 		previousSeqNumReturnedToApp: -1,
 	}
+	address, err := lspnet.ResolveUDPAddr("udp", hostport)
+	if err != nil {
+		return nil, err
+	}
+	ret.remoteAddress = address
 	//establish UDP connection to server
-	conn, err := lspnet.DialUDP(hostport, nil, &ret.remoteAddress)
+	conn, err := lspnet.DialUDP(hostport, nil, ret.remoteAddress)
 	if err != nil {
 		fmt.Println(err.Error())
 		return nil, err
@@ -87,7 +92,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	}
 
 	writerClosed := make(chan error)
-	writer := newWriterWithWindow(params.WindowSize, conn, &ret.remoteAddress, writerClosed)
+	writer := newWriterWithWindow(params.WindowSize, conn, ret.remoteAddress, writerClosed)
 	writer.start()
 	ret.writer = writer
 	go func() {
@@ -321,7 +326,7 @@ func (c *client) writeSocket(addr *lspnet.UDPAddr, sendMsg chan Message, explici
 
 func protocolConnect(message []byte, c *client) error {
 	//repeat several times to send connection message until time out or receive an ack from server
-	c.connection.WriteToUDP(message, &c.remoteAddress)
+	c.connection.WriteToUDP(message, c.remoteAddress)
 DONE:
 	for i := 0; i < c.params.EpochLimit; i++ {
 		timeOut := time.After(time.Duration(c.params.EpochMillis) * time.Millisecond)
@@ -331,7 +336,7 @@ DONE:
 			if i+1 == c.params.EpochLimit {
 				break DONE
 			}
-			c.connection.WriteToUDP(message, &c.remoteAddress)
+			c.connection.WriteToUDP(message, c.remoteAddress)
 		case msg := <-c.dataIncomingMsg:
 			if c.verify(msg) && msg.Type == MsgAck {
 				c.connectionId = msg.ConnID
