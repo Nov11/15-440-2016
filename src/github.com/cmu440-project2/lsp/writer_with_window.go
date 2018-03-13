@@ -55,7 +55,7 @@ func (www *writerWithWindow) start() {
 				if stop == true {
 					continue
 				}
-				if msg.Type!= MsgData {
+				if msg.Type != MsgData {
 					fmt.Println("!!!!")
 				}
 				www.pendingMessage = append(www.pendingMessage, msg)
@@ -96,7 +96,12 @@ func (www *writerWithWindow) start() {
 }
 func (www *writerWithWindow) writeMessage(message *Message) error {
 	bb := encode(message)
-	_, err := www.conn.WriteToUDP(bb, www.remoteAddress)
+	var err error
+	if www.remoteAddress == nil {
+		_, err = www.conn.Write(bb)
+	} else {
+		_, err = www.conn.WriteToUDP(bb, www.remoteAddress)
+	}
 	fmt.Printf("writeMessage called with %v\n", message)
 	return err
 }
