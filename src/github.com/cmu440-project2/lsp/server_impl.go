@@ -6,14 +6,26 @@ import (
 	"errors"
 	"github.com/cmu440-project2/lspnet"
 	"strconv"
+	"fmt"
+	"sync"
 )
 
 type server struct {
-	address          *lspnet.UDPAddr
-	connection       *lspnet.UDPConn
-	nextConnectionId int
-	connectIdList    map[int]lspnet.UDPConn
-	closing          bool
+	address              *lspnet.UDPAddr
+	connection           *lspnet.UDPConn
+	nextConnectionId     int
+	connectIdList        map[int]*client
+	address2ConnectionId map[lspnet.UDPAddr]int
+	closing              bool
+	signalReaderClosed   chan error
+	dataIncomingPacket   chan *Packet
+	mtx                  sync.Mutex
+	cmdGetClient         chan int
+	dataClient           chan *client
+	cmdGetMsg            chan int
+	receivedPacket       []*Packet
+	reqNewPacket         bool
+	dataGetMsg           chan *Message
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -32,26 +44,95 @@ func NewServer(port int, params *Params) (Server, error) {
 		return nil, err
 	}
 	ret := server{
-		address:          address,
-		connection:       conn,
-		nextConnectionId: 0,
-		connectIdList:    make(map[int]lspnet.UDPConn),
-		closing:          false,}
+		address:              address,
+		connection:           conn,
+		nextConnectionId:     1,
+		connectIdList:        make(map[int]*client),
+		address2ConnectionId: make(map[lspnet.UDPAddr]int),
+		closing:              false,
+		signalReaderClosed:   make(chan error),
+		dataIncomingPacket:   make(chan *Packet),
+		cmdGetMsg:            make(chan int),
+		dataGetMsg:           make(chan *Message),
+	}
+
+	go readSocketWithAddress(ret.connection, ret.dataIncomingPacket, ret.signalReaderClosed)
+	go func() {
+		for {
+			select {
+			case packet := <-ret.dataIncomingPacket:
+				msg := packet.msg
+				addr := packet.addr
+				if msg.Type == MsgConnect {
+					if _, exist := ret.address2ConnectionId[*addr]; !exist {
+						id := ret.nextConnectionId
+						ret.nextConnectionId++
+						ret.address2ConnectionId[*addr] = id
+						ret.connectIdList[id] = createNewClient(id, params, address, conn, nil, nil)
+					}
+					id := ret.address2ConnectionId[*addr]
+					c := ret.connectIdList[id]
+					c.Write(encode(NewAck(id, 0)))
+				} else {
+					c, ok := ret.connectIdList[msg.ConnID]
+					if !ok {
+						//ignore
+						fmt.Printf("ignore packet %v as there's no related worker", packet)
+						continue
+					}
+					c.appendPacket(packet)
+					if ret.reqNewPacket {
+						ret.reqNewPacket = false
+						ret.dataGetMsg <- msg
+					} else {
+						ret.receivedPacket = append(ret.receivedPacket, packet)
+					}
+				}
+			case connId := <-ret.cmdGetClient:
+				c, ok := ret.connectIdList[connId]
+				if !ok {
+					ret.dataClient <- nil
+				}
+				ret.dataClient <- c
+			case <-ret.cmdGetMsg:
+				ret.reqNewPacket = true
+				if len(ret.receivedPacket) > 0 {
+					ret.reqNewPacket = false
+					p := ret.receivedPacket[0]
+					ret.receivedPacket = ret.receivedPacket[1:]
+					ret.dataGetMsg <- p.msg
+				}
+			}
+
+		}
+	}()
 	return &ret, nil
 }
 
 func (s *server) Read() (int, []byte, error) {
-	// TODO: remove this line when you are ready to begin implementing this method.
-	select {} // Blocks indefinitely.
-	return -1, nil, errors.New("not yet implemented")
+	if s.closing {
+		return 0, nil, errors.New("server closed")
+	}
+	s.cmdGetMsg <- 1
+	msg := <-s.dataGetMsg
+	if msg.Type == -1 {
+		var err error
+		decodeInterface(msg.Payload, &err)
+		return msg.ConnID, nil, err
+	}
+	return msg.ConnID, msg.Payload, nil
 }
 
 func (s *server) Write(connID int, payload []byte) error {
-	return errors.New("not yet implemented")
+	s.cmdGetClient <- connID
+	c := <-s.dataClient
+	return c.Write(payload)
 }
 
 func (s *server) CloseConn(connID int) error {
-	return errors.New("not yet implemented")
+	s.cmdGetClient <- connID
+	c := <-s.dataClient
+	return c.Close()
 }
 
 func (s *server) Close() error {

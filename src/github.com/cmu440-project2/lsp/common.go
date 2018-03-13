@@ -11,6 +11,11 @@ func decode(raw []byte, msg *Message) {
 	checkError(err)
 }
 
+func decodeInterface(raw [] byte, v interface{}) {
+	err := json.Unmarshal(raw, v)
+	checkError(err)
+}
+
 func encode(msg *Message) []byte {
 	ret, err := json.Marshal(msg)
 	checkError(err)

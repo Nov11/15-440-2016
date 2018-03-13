@@ -96,7 +96,7 @@ func (www *writerWithWindow) start() {
 }
 func (www *writerWithWindow) writeMessage(message *Message) error {
 	bb := encode(message)
-	_, err := www.conn.Write(bb)
+	_, err := www.conn.WriteToUDP(bb, www.remoteAddress)
 	fmt.Printf("writeMessage called with %v\n", message)
 	return err
 }
