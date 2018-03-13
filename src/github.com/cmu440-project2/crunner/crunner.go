@@ -55,10 +55,10 @@ func main() {
 
 func runClient(cli lsp.Client) {
 	defer fmt.Println("Exiting...")
-	cnt := 1
-	for {
+
+	for cnt := 1; cnt < 1000; cnt++ {
 		// Get next token from input.
-		fmt.Printf("Client: ")
+		fmt.Println("Client: " + strconv.Itoa(cnt))
 		var s string
 		s = strconv.Itoa(cnt)
 		cnt++
@@ -79,4 +79,6 @@ func runClient(cli lsp.Client) {
 		}
 		fmt.Printf("Server: %s\n", string(payload))
 	}
+	cli.Close()
+	fmt.Println("client fully closed")
 }

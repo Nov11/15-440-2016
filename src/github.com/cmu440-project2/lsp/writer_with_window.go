@@ -35,17 +35,18 @@ func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPA
 
 func (www *writerWithWindow) start() {
 	go func() {
-		var err error
+		var globalError error
 		defer func() {
-			www.returnChannel <- err
+			fmt.Println("!!!!! writer exit")
+			www.returnChannel <- globalError
 		}()
 		stop := false
-		for !stop && len(www.pendingMessage) == 0 {
+		for !stop || len(www.pendingMessage) != 0 {
 			select {
 			case cmd := <-www.cmdShutdown:
 				stop = true
 				if cmd.reason != "" {
-					err = errors.New(cmd.reason)
+					globalError = errors.New(cmd.reason)
 					www.pendingMessage = nil
 				} else {
 					www.windowSize = 99999
@@ -54,10 +55,14 @@ func (www *writerWithWindow) start() {
 				if stop == true {
 					continue
 				}
+				if msg.Type!= MsgData {
+					fmt.Println("!!!!")
+				}
 				www.pendingMessage = append(www.pendingMessage, msg)
 			case number := <-www.ack:
 				for i := 0; i < www.needAck; i++ {
 					if www.pendingMessage[i].SeqNum == number {
+						fmt.Printf("message sent %v has been acked\n", www.pendingMessage[i])
 						www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
 						www.needAck--
 						break
@@ -90,11 +95,19 @@ func (www *writerWithWindow) start() {
 	}()
 }
 func (www *writerWithWindow) writeMessage(message *Message) error {
-	_, err := www.conn.Write(encode(message))
+	bb := encode(message)
+	_, err := www.conn.Write(bb)
+	fmt.Printf("writeMessage called with %v\n", message)
 	return err
 }
 func (www *writerWithWindow) add(msg *Message) {
-	www.newMessage <- msg
+	if msg.Type == MsgConnect {
+		fmt.Println("!!!!!!!!!!!!!!!!!!!")
+	} else if msg.Type == MsgAck {
+		www.writeMessage(msg)
+	} else {
+		www.newMessage <- msg
+	}
 }
 
 func (www *writerWithWindow) getAck(number int) {
