@@ -11,21 +11,22 @@ import (
 )
 
 type server struct {
-	address              *lspnet.UDPAddr
-	connection           *lspnet.UDPConn
-	nextConnectionId     int
-	connectIdList        map[int]*client
-	address2ConnectionId map[lspnet.UDPAddr]int
-	closing              bool
-	signalReaderClosed   chan error
-	dataIncomingPacket   chan *Packet
-	mtx                  sync.Mutex
-	cmdGetClient         chan int
-	dataClient           chan *client
-	cmdGetMsg            chan int
-	receivedPacket       []*Packet
-	reqNewPacket         bool
-	dataGetMsg           chan *Message
+	address                          *lspnet.UDPAddr
+	connection                       *lspnet.UDPConn
+	nextConnectionId                 int
+	connectIdList                    map[int]*client
+	address2ConnectionId             map[lspnet.UDPAddr]int
+	closing                          bool
+	signalReaderClosed               chan error
+	dataIncomingPacket               chan *Packet
+	mtx                              sync.Mutex
+	cmdGetClient                     chan int
+	dataClient                       chan *client
+	cmdGetMsg                        chan int
+	receivedDataPacket               []*Packet
+	reqNewPacket                     bool
+	dataGetMsg                       chan *Message
+	clientReceivedDataIncomingPacket chan *Packet
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -44,16 +45,17 @@ func NewServer(port int, params *Params) (Server, error) {
 		return nil, err
 	}
 	ret := server{
-		address:              address,
-		connection:           conn,
-		nextConnectionId:     1,
-		connectIdList:        make(map[int]*client),
-		address2ConnectionId: make(map[lspnet.UDPAddr]int),
-		closing:              false,
-		signalReaderClosed:   make(chan error),
-		dataIncomingPacket:   make(chan *Packet),
-		cmdGetMsg:            make(chan int),
-		dataGetMsg:           make(chan *Message),
+		address:                          address,
+		connection:                       conn,
+		nextConnectionId:                 1,
+		connectIdList:                    make(map[int]*client),
+		address2ConnectionId:             make(map[lspnet.UDPAddr]int),
+		closing:                          false,
+		signalReaderClosed:               make(chan error),
+		dataIncomingPacket:               make(chan *Packet),
+		cmdGetMsg:                        make(chan int),
+		dataGetMsg:                       make(chan *Message),
+		clientReceivedDataIncomingPacket: make(chan *Packet),
 	}
 
 	go readSocketWithAddress(ret.connection, ret.dataIncomingPacket, ret.signalReaderClosed)
@@ -68,7 +70,7 @@ func NewServer(port int, params *Params) (Server, error) {
 						id := ret.nextConnectionId
 						ret.nextConnectionId++
 						ret.address2ConnectionId[*addr] = id
-						ret.connectIdList[id] = createNewClient(id, params, address, conn, nil, nil)
+						ret.connectIdList[id] = createNewClient(id, params, address, conn, nil, nil, ret.clientReceivedDataIncomingPacket)
 					}
 					id := ret.address2ConnectionId[*addr]
 					c := ret.connectIdList[id]
@@ -81,12 +83,6 @@ func NewServer(port int, params *Params) (Server, error) {
 						continue
 					}
 					c.appendPacket(packet)
-					if ret.reqNewPacket {
-						ret.reqNewPacket = false
-						ret.dataGetMsg <- msg
-					} else {
-						ret.receivedPacket = append(ret.receivedPacket, packet)
-					}
 				}
 			case connId := <-ret.cmdGetClient:
 				c, ok := ret.connectIdList[connId]
@@ -96,11 +92,19 @@ func NewServer(port int, params *Params) (Server, error) {
 				ret.dataClient <- c
 			case <-ret.cmdGetMsg:
 				ret.reqNewPacket = true
-				if len(ret.receivedPacket) > 0 {
+				if len(ret.receivedDataPacket) > 0 {
 					ret.reqNewPacket = false
-					p := ret.receivedPacket[0]
-					ret.receivedPacket = ret.receivedPacket[1:]
+					p := ret.receivedDataPacket[0]
+					ret.receivedDataPacket = ret.receivedDataPacket[1:]
 					ret.dataGetMsg <- p.msg
+				}
+			case p := <-ret.clientReceivedDataIncomingPacket:
+				msg := p.msg
+				if ret.reqNewPacket {
+					ret.reqNewPacket = false
+					ret.dataGetMsg <- msg
+				} else {
+					ret.receivedDataPacket = append(ret.receivedDataPacket, p)
 				}
 			}
 

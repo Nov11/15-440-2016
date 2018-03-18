@@ -22,6 +22,12 @@ func encode(msg *Message) []byte {
 	return ret
 }
 
+func encodeInterface( v interface{}) []byte {
+	ret, err := json.Marshal(v)
+	checkError(err)
+	return ret
+}
+
 func checkError(err error) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())

@@ -34,6 +34,7 @@ type client struct {
 	signalReaderClosed          chan error
 	ackForLastReceivedMessage   *Message
 	result                      chan error
+	dataPacketSideWay           chan *Packet
 }
 
 func (c *client) closeChannels() {
@@ -82,7 +83,7 @@ func NewClient(hostport string, params *Params) (Client, error) {
 	}
 
 	fmt.Println("connected to server")
-	ret := createNewClient(id, params, address, conn, dataIncomingPacket, signalReaderClosed)
+	ret := createNewClient(id, params, address, conn, dataIncomingPacket, signalReaderClosed, nil)
 	return ret, nil
 }
 
@@ -250,7 +251,13 @@ func (c *client) setupAckToLastReceivedMsg(seqNum int) {
 	c.ackForLastReceivedMessage = NewAck(c.connectionId, seqNum)
 }
 
-func createNewClient(connectionId int, params *Params, address *lspnet.UDPAddr, conn *lspnet.UDPConn, dataIncomingPacket chan *Packet, signalReaderClosed chan error) *client {
+func createNewClient(connectionId int,
+	params *Params,
+	address *lspnet.UDPAddr,
+	conn *lspnet.UDPConn,
+	dataIncomingPacket chan *Packet,
+	signalReaderClosed chan error,
+	sendDataPacket chan *Packet) *client {
 	ret := &client{
 		connectionId:                connectionId,
 		nextSequenceNumber:          1,
@@ -267,6 +274,7 @@ func createNewClient(connectionId int, params *Params, address *lspnet.UDPAddr, 
 		previousSeqNumReturnedToApp: 0,
 		signalWriterClosed:          make(chan error, 1),
 		signalReaderClosed:          signalReaderClosed,
+		dataPacketSideWay:           sendDataPacket,
 	}
 	if dataIncomingPacket == nil {
 		ret.dataIncomingPacket = make(chan *Packet)
@@ -279,7 +287,12 @@ func createNewClient(connectionId int, params *Params, address *lspnet.UDPAddr, 
 	writer.start()
 	ret.writer = writer
 	go func() {
-		defer func() { fmt.Println("!!!!!main loop exited") }()
+		defer func() {
+			msg := &Message{Type: -1, Payload: encodeInterface(&ret.closeReason)}
+			p := &Packet{msg: msg}
+			ret.dataPacketSideWay <- p
+			fmt.Println("!!!!!main loop exited")
+		}()
 		timeOutCntLeft := ret.params.EpochLimit
 		timeOut := time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
 		dataMessageInThisEpoch := 0
@@ -291,6 +304,7 @@ func createNewClient(connectionId int, params *Params, address *lspnet.UDPAddr, 
 					ret.closeReason = cmd.reason
 					ret.closed = true
 					if ret.closeReason == "" {
+						ret.closeReason = "explicit close"
 						writer.close()
 					} else {
 						ret.connection.Close()
@@ -319,6 +333,11 @@ func createNewClient(connectionId int, params *Params, address *lspnet.UDPAddr, 
 					//send ack for this data message
 					ack := NewAck(ret.connectionId, receiveMsg.SeqNum)
 					writer.add(ack)
+					go func() {
+						if ret.dataPacketSideWay != nil {
+							ret.dataPacketSideWay <- p
+						}
+					}()
 				}
 
 				if reqReadMsg == true {
