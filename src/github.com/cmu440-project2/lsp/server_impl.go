@@ -15,7 +15,7 @@ type server struct {
 	connection                       *lspnet.UDPConn
 	nextConnectionId                 int
 	connectIdList                    map[int]*client
-	address2ConnectionId             map[lspnet.UDPAddr]int
+	address2ConnectionId             map[string]int
 	closing                          bool
 	signalReaderClosed               chan error
 	dataIncomingPacket               chan *Packet
@@ -27,6 +27,7 @@ type server struct {
 	reqNewPacket                     bool
 	dataGetMsg                       chan *Message
 	clientReceivedDataIncomingPacket chan *Packet
+	clientExit                       chan int
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -36,6 +37,12 @@ type server struct {
 // project 0, etc.) and immediately return. It should return a non-nil error if
 // there was an error resolving or listening on the specified port number.
 func NewServer(port int, params *Params) (Server, error) {
+
+	e13 := errors.New("1234567")
+	txt := encodeError(&e13)
+	e23 := errors.New("")
+	decodeError(txt, &e23)
+	fmt.Printf("%v\n", e23)
 
 	address, err := lspnet.ResolveUDPAddr("udp", "localhost:"+strconv.Itoa(port))
 	checkError(err)
@@ -49,32 +56,37 @@ func NewServer(port int, params *Params) (Server, error) {
 		connection:                       conn,
 		nextConnectionId:                 1,
 		connectIdList:                    make(map[int]*client),
-		address2ConnectionId:             make(map[lspnet.UDPAddr]int),
+		address2ConnectionId:             make(map[string]int),
 		closing:                          false,
 		signalReaderClosed:               make(chan error),
 		dataIncomingPacket:               make(chan *Packet),
 		cmdGetMsg:                        make(chan int),
 		dataGetMsg:                       make(chan *Message),
 		clientReceivedDataIncomingPacket: make(chan *Packet),
+		cmdGetClient:                     make(chan int),
+		dataClient:                       make(chan *client),
+		clientExit:                       make(chan int),
 	}
 
 	go readSocketWithAddress(ret.connection, ret.dataIncomingPacket, ret.signalReaderClosed)
 	go func() {
+		defer func() { fmt.Println("!!!!! server main loop exit") }()
 		for {
 			select {
 			case packet := <-ret.dataIncomingPacket:
+				fmt.Printf("received packet:%v\n", packet)
 				msg := packet.msg
 				addr := packet.addr
 				if msg.Type == MsgConnect {
-					if _, exist := ret.address2ConnectionId[*addr]; !exist {
+					if _, exist := ret.address2ConnectionId[addr.String()]; !exist {
 						id := ret.nextConnectionId
 						ret.nextConnectionId++
-						ret.address2ConnectionId[*addr] = id
-						ret.connectIdList[id] = createNewClient(id, params, address, conn, nil, nil, ret.clientReceivedDataIncomingPacket)
+						ret.address2ConnectionId[addr.String()] = id
+						ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit)
 					}
-					id := ret.address2ConnectionId[*addr]
+					id := ret.address2ConnectionId[addr.String()]
 					c := ret.connectIdList[id]
-					c.Write(encode(NewAck(id, 0)))
+					c.WriteImpl(nil, MsgAck)
 				} else {
 					c, ok := ret.connectIdList[msg.ConnID]
 					if !ok {
@@ -106,6 +118,14 @@ func NewServer(port int, params *Params) (Server, error) {
 				} else {
 					ret.receivedDataPacket = append(ret.receivedDataPacket, p)
 				}
+			case no := <-ret.clientExit:
+				c, ok := ret.connectIdList[no]
+				if !ok{
+					fmt.Println("closing unexisted client!")
+				}
+				addr := c.remoteAddress
+				delete(ret.address2ConnectionId, addr.String())
+				delete(ret.connectIdList, no)
 			}
 
 		}
@@ -120,9 +140,9 @@ func (s *server) Read() (int, []byte, error) {
 	s.cmdGetMsg <- 1
 	msg := <-s.dataGetMsg
 	if msg.Type == -1 {
-		var err error
-		decodeInterface(msg.Payload, &err)
-		return msg.ConnID, nil, err
+		str := string("")
+		decodeString(msg.Payload, &str)
+		return msg.ConnID, nil, errors.New(str)
 	}
 	return msg.ConnID, msg.Payload, nil
 }

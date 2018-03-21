@@ -102,7 +102,7 @@ func (www *writerWithWindow) writeMessage(message *Message) error {
 	} else {
 		_, err = www.conn.WriteToUDP(bb, www.remoteAddress)
 	}
-	fmt.Printf("writeMessage called with %v\n", message)
+	fmt.Printf("writeMessage called with %v target : %v\n", message, www.remoteAddress)
 	return err
 }
 func (www *writerWithWindow) add(msg *Message) {

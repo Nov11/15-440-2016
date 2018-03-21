@@ -42,6 +42,14 @@ type Packet struct {
 	addr *lspnet.UDPAddr
 }
 
+func (p *Packet) String() string {
+	s := "msg:"
+	s += p.msg.String()
+	s += " "
+	s += p.addr.String()
+	return s
+}
+
 func readSocketWithAddress(conn *lspnet.UDPConn, dataOut chan *Packet, signalReaderClosed chan error) {
 	var globalError error
 	defer func() {
@@ -64,6 +72,7 @@ func readSocketWithAddress(conn *lspnet.UDPConn, dataOut chan *Packet, signalRea
 
 			}
 			globalError = errors.New("read from socket returns " + err.Error())
+			fmt.Println("reader encounter :" + globalError.Error())
 			return
 		}
 		msg := Message{}
