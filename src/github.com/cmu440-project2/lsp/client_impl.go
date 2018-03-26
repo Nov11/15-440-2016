@@ -339,39 +339,45 @@ func createNewClient(connectionId int,
 					}
 				}
 			case p := <-ret.dataIncomingPacket:
-				receiveMsg := p.msg
-				fmt.Printf(ret.name+"read msg from socket: %v\n", receiveMsg)
-				//validate
-				if !verify(receiveMsg, ret) {
-					fmt.Printf("msg : %v mal formatted", receiveMsg)
-					continue
-				}
+				var list []*Packet
+				list = append(list, p)
+				list = append(list, readAllPackets(ret.dataIncomingPacket)...)
+				for _, p = range list{
+					receiveMsg := p.msg
+					fmt.Printf(ret.name+"read msg from socket: %v\n", receiveMsg)
+					//validate
+					if !verify(receiveMsg, ret) {
+						fmt.Printf("msg : %v mal formatted", receiveMsg)
+						continue
+					}
 
-				if receiveMsg.Type == MsgConnect {
-					fmt.Println("received connection message. ignore")
-				} else if receiveMsg.Type == MsgAck {
-					writer.getAck(receiveMsg.SeqNum)
-				} else {
-					//update epoch timeout count
-					dataMessageInThisEpoch++
-					//push to receiveMessage queue
-					isNewMsg := ret.appendNewReceivedMessage(receiveMsg)
-					//send ack for this data message
-					ack := NewAck(ret.connectionId, receiveMsg.SeqNum)
-					writer.add(ack)
-					go func() {
-						if isNewMsg && ret.dataPacketSideWay != nil{
-							ret.dataPacketSideWay <- p
+					if receiveMsg.Type == MsgConnect {
+						fmt.Println("received connection message. ignore")
+					} else if receiveMsg.Type == MsgAck {
+						writer.getAck(receiveMsg.SeqNum)
+					} else {
+						//update epoch timeout count
+						dataMessageInThisEpoch++
+						//push to receiveMessage queue
+						isNewMsg := ret.appendNewReceivedMessage(receiveMsg)
+						//send ack for this data message
+						ack := NewAck(ret.connectionId, receiveMsg.SeqNum)
+						writer.add(ack)
+						go func(ptrCopy *Packet) {
+							if isNewMsg && ret.dataPacketSideWay != nil{
+								fmt.Printf("push into server thread : %v\n", ptrCopy)
+								ret.dataPacketSideWay <- ptrCopy
+							}
+						}(p)
+					}
+
+					if reqReadMsg == true {
+						nextMsg := ret.getNextMessage()
+						if nextMsg != nil {
+							reqReadMsg = false
+							fmt.Println("returning newest message")
+							ret.dataNewestMessage <- nextMsg
 						}
-					}()
-				}
-
-				if reqReadMsg == true {
-					nextMsg := ret.getNextMessage()
-					if nextMsg != nil {
-						reqReadMsg = false
-						fmt.Println("returning newest message")
-						ret.dataNewestMessage <- nextMsg
 					}
 				}
 			case <-timeOut:

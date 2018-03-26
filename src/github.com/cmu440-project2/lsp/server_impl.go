@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"fmt"
 	"sync"
+	"os"
 )
 
 type server struct {
@@ -166,6 +167,11 @@ func (s *server) Read() (int, []byte, error) {
 	}
 	s.cmdGetMsg <- 1
 	msg := <-s.dataGetMsg
+	if msg.Type != MsgData {
+		fmt.Printf("%v\n", msg)
+		os.Exit(1)
+	}
+
 	if msg.Type == -1 {
 		str := string("")
 		decodeString(msg.Payload, &str)
