@@ -28,6 +28,8 @@ type server struct {
 	dataGetMsg                       chan *Message
 	clientReceivedDataIncomingPacket chan *Packet
 	clientExit                       chan int
+	clientNumber                     int
+	name                             string
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -66,15 +68,16 @@ func NewServer(port int, params *Params) (Server, error) {
 		cmdGetClient:                     make(chan int),
 		dataClient:                       make(chan *client),
 		clientExit:                       make(chan int),
+		name:                             "server",
 	}
 
-	go readSocketWithAddress(ret.connection, ret.dataIncomingPacket, ret.signalReaderClosed)
+	go readSocketWithAddress(ret.connection, ret.dataIncomingPacket, ret.signalReaderClosed, ret.name)
 	go func() {
 		defer func() { fmt.Println("!!!!! server main loop exit") }()
 		for {
 			select {
 			case packet := <-ret.dataIncomingPacket:
-				fmt.Printf("received packet:%v\n", packet)
+				fmt.Printf("%s received packet:%v\n", ret.name, packet)
 				msg := packet.msg
 				addr := packet.addr
 				if msg.Type == MsgConnect {
@@ -82,7 +85,8 @@ func NewServer(port int, params *Params) (Server, error) {
 						id := ret.nextConnectionId
 						ret.nextConnectionId++
 						ret.address2ConnectionId[addr.String()] = id
-						ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit)
+						ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit, ret.name+strconv.Itoa(ret.clientNumber))
+						ret.clientNumber++
 					}
 					id := ret.address2ConnectionId[addr.String()]
 					c := ret.connectIdList[id]
@@ -120,7 +124,7 @@ func NewServer(port int, params *Params) (Server, error) {
 				}
 			case no := <-ret.clientExit:
 				c, ok := ret.connectIdList[no]
-				if !ok{
+				if !ok {
 					fmt.Println("closing unexisted client!")
 				}
 				addr := c.remoteAddress

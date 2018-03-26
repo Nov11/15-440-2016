@@ -50,10 +50,10 @@ func (p *Packet) String() string {
 	return s
 }
 
-func readSocketWithAddress(conn *lspnet.UDPConn, dataOut chan *Packet, signalReaderClosed chan error) {
+func readSocketWithAddress(conn *lspnet.UDPConn, dataOut chan *Packet, signalReaderClosed chan error, name string) {
 	var globalError error
 	defer func() {
-		fmt.Println("!!!!! reader exit")
+		fmt.Println("!!!!! reader exit " + name)
 		signalReaderClosed <- globalError
 	}()
 
@@ -71,8 +71,8 @@ func readSocketWithAddress(conn *lspnet.UDPConn, dataOut chan *Packet, signalRea
 				//client should shutdown itself
 
 			}
-			globalError = errors.New("read from socket returns " + err.Error())
-			fmt.Println("reader encounter :" + globalError.Error())
+			globalError = errors.New(name + "read from socket returns " + err.Error())
+			fmt.Println(name + "reader encounter :" + globalError.Error())
 			return
 		}
 		msg := Message{}

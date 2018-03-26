@@ -37,6 +37,7 @@ type client struct {
 	dataPacketSideWay           chan *Packet
 	shareSocket                 bool
 	clientExit                  chan int
+	name                        string
 }
 
 func (c *client) closeChannels() {
@@ -76,7 +77,7 @@ func NewClient(hostport string, params *Params) (*client, error) {
 	//fire up read routine
 	dataIncomingPacket := make(chan *Packet)
 	signalReaderClosed := make(chan error)
-	go readSocketWithAddress(conn, dataIncomingPacket, signalReaderClosed)
+	go readSocketWithAddress(conn, dataIncomingPacket, signalReaderClosed, "client")
 	//send connection message and wait for server's reply
 	id, err := protocolConnect(msg, conn, params, dataIncomingPacket)
 	if err != nil {
@@ -85,7 +86,7 @@ func NewClient(hostport string, params *Params) (*client, error) {
 	}
 
 	fmt.Println("connected to server")
-	ret := createNewClient(id, params, address, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil)
+	ret := createNewClient(id, params, nil, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil, "client")
 	return ret, nil
 }
 
@@ -93,17 +94,17 @@ func NewClient(hostport string, params *Params) (*client, error) {
 func (c *client) appendNewReceivedMessage(msg *Message) {
 	for i := 0; i < len(c.receiveMessageQueue); i++ {
 		if c.receiveMessageQueue[i].SeqNum == msg.SeqNum {
-			fmt.Println("appendNewReceivedMessage ignore duplicate message with same seq num :" + strconv.Itoa(msg.SeqNum))
+			fmt.Println(c.name + " appendNewReceivedMessage ignore duplicate message with same seq num :" + strconv.Itoa(msg.SeqNum))
 			return
 		} else if c.receiveMessageQueue[i].SeqNum > msg.SeqNum {
-			fmt.Println("appendNewReceivedMessage prepend seq num :" + strconv.Itoa(msg.SeqNum))
+			fmt.Println(c.name + " appendNewReceivedMessage prepend seq num :" + strconv.Itoa(msg.SeqNum))
 			tmp := c.receiveMessageQueue[i:]
 			c.receiveMessageQueue = append(c.receiveMessageQueue[:i], msg)
 			c.receiveMessageQueue = append(c.receiveMessageQueue, tmp...)
 			return
 		}
 	}
-	fmt.Println("appendNewReceivedMessage append seq num :" + strconv.Itoa(msg.SeqNum))
+	fmt.Println(c.name + " appendNewReceivedMessage append seq num :" + strconv.Itoa(msg.SeqNum))
 	c.receiveMessageQueue = append(c.receiveMessageQueue, msg)
 }
 
@@ -166,7 +167,7 @@ func (c *client) Read() ([]byte, error) {
 	c.cmdReadNewestMessage <- 1
 	msg, ok := <-c.dataNewestMessage
 	if ok == true {
-		return encode(msg), nil
+		return msg.Payload, nil
 	}
 	return nil, errors.New(c.closeReason)
 }
@@ -271,7 +272,8 @@ func createNewClient(connectionId int,
 	signalReaderClosed chan error,
 	sendDataPacket chan *Packet,
 	shareSocket bool,
-	clientExit chan int) *client {
+	clientExit chan int,
+	name string) *client {
 	ret := &client{
 		connectionId:                connectionId,
 		nextSequenceNumber:          1,
@@ -291,6 +293,7 @@ func createNewClient(connectionId int,
 		dataPacketSideWay:           sendDataPacket,
 		shareSocket:                 shareSocket,
 		clientExit:                  clientExit,
+		name:                        name,
 	}
 	if dataIncomingPacket == nil {
 		ret.dataIncomingPacket = make(chan *Packet)
@@ -299,7 +302,7 @@ func createNewClient(connectionId int,
 		ret.signalReaderClosed = make(chan error)
 	}
 	writer :=
-		newWriterWithWindow(params.WindowSize, conn, address, ret.signalWriterClosed)
+		newWriterWithWindow(params.WindowSize, conn, address, ret.signalWriterClosed, ret.name+"'s www")
 	writer.start()
 	ret.writer = writer
 	go func() {
@@ -333,7 +336,7 @@ func createNewClient(connectionId int,
 				}
 			case p := <-ret.dataIncomingPacket:
 				receiveMsg := p.msg
-				fmt.Printf("read msg from socket: %v\n", receiveMsg)
+				fmt.Printf(ret.name+"read msg from socket: %v\n", receiveMsg)
 				//validate
 				if !verify(receiveMsg, ret) {
 					fmt.Printf("msg : %v mal formatted", receiveMsg)
@@ -407,7 +410,7 @@ func createNewClient(connectionId int,
 					return
 				}
 			case <-ret.cmdReadNewestMessage:
-				fmt.Println("requesting new message")
+				fmt.Println(ret.name + "requesting new message")
 				reqReadMsg = true
 				msg := ret.getNextMessage()
 				if msg != nil {

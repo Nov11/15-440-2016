@@ -17,9 +17,10 @@ type writerWithWindow struct {
 	returnChannel  chan error
 	ack            chan int
 	cmdResend      chan int
+	name           string
 }
 
-func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPAddr, signalExit chan error) *writerWithWindow {
+func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPAddr, signalExit chan error, name string) *writerWithWindow {
 	ret := &writerWithWindow{
 		windowSize:    windowSize,
 		cmdShutdown:   make(chan CloseCmd),
@@ -29,6 +30,7 @@ func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPA
 		ack:           make(chan int),
 		cmdResend:     make(chan int),
 		returnChannel: signalExit,
+		name:          name,
 	}
 	return ret
 }
@@ -37,7 +39,7 @@ func (www *writerWithWindow) start() {
 	go func() {
 		var globalError error
 		defer func() {
-			fmt.Println("!!!!! writer exit")
+			fmt.Println("!!!!! writer exit" + www.name)
 			www.returnChannel <- globalError
 		}()
 		stop := false
@@ -62,7 +64,7 @@ func (www *writerWithWindow) start() {
 			case number := <-www.ack:
 				for i := 0; i < www.needAck; i++ {
 					if www.pendingMessage[i].SeqNum == number {
-						fmt.Printf("message sent %v has been acked\n", www.pendingMessage[i])
+						fmt.Printf(www.name + " message sent %v has been acked\n", www.pendingMessage[i])
 						www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
 						www.needAck--
 						break
@@ -81,7 +83,7 @@ func (www *writerWithWindow) start() {
 				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize {
 					err := www.writeMessage(www.pendingMessage[www.needAck])
 					if err != nil {
-						str := err.Error() + ": close writer"
+						str := err.Error() + ": close writer" + www.name
 						fmt.Println(str)
 						cmd := CloseCmd{reason: str}
 						go func() { www.cmdShutdown <- cmd }()
@@ -102,7 +104,7 @@ func (www *writerWithWindow) writeMessage(message *Message) error {
 	} else {
 		_, err = www.conn.WriteToUDP(bb, www.remoteAddress)
 	}
-	fmt.Printf("writeMessage called with %v target : %v\n", message, www.remoteAddress)
+	fmt.Printf("%s writeMessage called with %v target : %v\n", www.name, message, www.remoteAddress)
 	return err
 }
 func (www *writerWithWindow) add(msg *Message) {
