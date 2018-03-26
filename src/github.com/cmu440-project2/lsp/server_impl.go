@@ -80,7 +80,7 @@ func NewServer(port int, params *Params) (Server, error) {
 				var localPacketList []*Packet
 				localPacketList = append(localPacketList, packet)
 				localPacketList = append(localPacketList, readAllPackets(ret.dataIncomingPacket)...)
-				fmt.Println("batch read " + strconv.Itoa(len(localPacketList)) + " packets:dataIncomingPacket")
+				fmt.Println(ret.name + "batch read " + strconv.Itoa(len(localPacketList)) + " packets:dataIncomingPacket")
 				for _, packet = range localPacketList {
 					fmt.Printf("%s received packet:%v\n", ret.name, packet)
 					msg := packet.msg
@@ -114,12 +114,21 @@ func NewServer(port int, params *Params) (Server, error) {
 				}
 				ret.dataClient <- c
 			case <-ret.cmdGetMsg:
+				if len(ret.dataGetMsg) > 0 {
+					continue
+				}
 				ret.reqNewPacket = true
-				if len(ret.receivedDataPacket) > 0 {
+			ENDGETMSG:
+				for len(ret.receivedDataPacket) > 0 {
 					ret.reqNewPacket = false
 					p := ret.receivedDataPacket[0]
 					ret.receivedDataPacket = ret.receivedDataPacket[1:]
-					ret.dataGetMsg <- p.msg
+					select {
+					case ret.dataGetMsg <- p.msg:
+					default:
+						break ENDGETMSG
+					}
+
 				}
 			case p := <-ret.clientReceivedDataIncomingPacket:
 				localPacketList := []*Packet{p}
@@ -127,6 +136,7 @@ func NewServer(port int, params *Params) (Server, error) {
 				fmt.Println("batch read " + strconv.Itoa(len(localPacketList)) + " packets : clientReceivedIncomingPacket")
 				for _, p = range localPacketList {
 					msg := p.msg
+					fmt.Println(ret.name + " " + msg.String() + " message : clientReceivedIncomingPacket")
 					if ret.reqNewPacket {
 						ret.reqNewPacket = false
 						ret.dataGetMsg <- msg
@@ -161,7 +171,11 @@ func (s *server) Read() (int, []byte, error) {
 		decodeString(msg.Payload, &str)
 		return msg.ConnID, nil, errors.New(str)
 	}
-	fmt.Printf("%s read %v\n", s.name, msg)
+	breakThis := false
+	if (len(msg.Payload) == 0) {
+		breakThis = true
+	}
+	fmt.Printf("%s read %v payload len 0:%v\n", s.name, msg, breakThis)
 	return msg.ConnID, msg.Payload, nil
 }
 

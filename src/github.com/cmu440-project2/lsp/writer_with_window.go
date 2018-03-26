@@ -116,7 +116,7 @@ func (www *writerWithWindow) add(msg *Message) {
 	if msg.Type == MsgConnect {
 		fmt.Println("!!!!!!!!!!!!!!!!!!!")
 	} else if msg.Type == MsgAck {
-		www.writeMessage(msg)
+		go func() {www.writeMessage(msg)}()
 	} else {
 		www.newMessage <- msg
 	}
