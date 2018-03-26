@@ -61,10 +61,10 @@ func NewServer(port int, params *Params) (Server, error) {
 		address2ConnectionId:             make(map[string]int),
 		closing:                          false,
 		signalReaderClosed:               make(chan error),
-		dataIncomingPacket:               make(chan *Packet),
+		dataIncomingPacket:               make(chan *Packet, 1000),
 		cmdGetMsg:                        make(chan int),
-		dataGetMsg:                       make(chan *Message),
-		clientReceivedDataIncomingPacket: make(chan *Packet),
+		dataGetMsg:                       make(chan *Message, 1000),
+		clientReceivedDataIncomingPacket: make(chan *Packet, 1000),
 		cmdGetClient:                     make(chan int),
 		dataClient:                       make(chan *client),
 		clientExit:                       make(chan int),
@@ -77,29 +77,36 @@ func NewServer(port int, params *Params) (Server, error) {
 		for {
 			select {
 			case packet := <-ret.dataIncomingPacket:
-				fmt.Printf("%s received packet:%v\n", ret.name, packet)
-				msg := packet.msg
-				addr := packet.addr
-				if msg.Type == MsgConnect {
-					if _, exist := ret.address2ConnectionId[addr.String()]; !exist {
-						id := ret.nextConnectionId
-						ret.nextConnectionId++
-						ret.address2ConnectionId[addr.String()] = id
-						ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit, ret.name+strconv.Itoa(ret.clientNumber))
-						ret.clientNumber++
+				var localPacketList []*Packet
+				localPacketList = append(localPacketList, packet)
+				localPacketList = append(localPacketList, readAllPackets(ret.dataIncomingPacket)...)
+				fmt.Println("batch read " + strconv.Itoa(len(localPacketList)) + " packets:dataIncomingPacket")
+				for _, packet = range localPacketList {
+					fmt.Printf("%s received packet:%v\n", ret.name, packet)
+					msg := packet.msg
+					addr := packet.addr
+					if msg.Type == MsgConnect {
+						if _, exist := ret.address2ConnectionId[addr.String()]; !exist {
+							id := ret.nextConnectionId
+							ret.nextConnectionId++
+							ret.address2ConnectionId[addr.String()] = id
+							ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit, ret.name+strconv.Itoa(ret.clientNumber))
+							ret.clientNumber++
+						}
+						id := ret.address2ConnectionId[addr.String()]
+						c := ret.connectIdList[id]
+						c.WriteImpl(nil, MsgAck)
+					} else {
+						c, ok := ret.connectIdList[msg.ConnID]
+						if !ok {
+							//ignore
+							fmt.Printf("ignore packet %v as there's no related worker", packet)
+							continue
+						}
+						c.appendPacket(packet)
 					}
-					id := ret.address2ConnectionId[addr.String()]
-					c := ret.connectIdList[id]
-					c.WriteImpl(nil, MsgAck)
-				} else {
-					c, ok := ret.connectIdList[msg.ConnID]
-					if !ok {
-						//ignore
-						fmt.Printf("ignore packet %v as there's no related worker", packet)
-						continue
-					}
-					c.appendPacket(packet)
 				}
+
 			case connId := <-ret.cmdGetClient:
 				c, ok := ret.connectIdList[connId]
 				if !ok {
@@ -115,13 +122,19 @@ func NewServer(port int, params *Params) (Server, error) {
 					ret.dataGetMsg <- p.msg
 				}
 			case p := <-ret.clientReceivedDataIncomingPacket:
-				msg := p.msg
-				if ret.reqNewPacket {
-					ret.reqNewPacket = false
-					ret.dataGetMsg <- msg
-				} else {
-					ret.receivedDataPacket = append(ret.receivedDataPacket, p)
+				localPacketList := []*Packet{p}
+				localPacketList = append(localPacketList, readAllPackets(ret.clientReceivedDataIncomingPacket)...)
+				fmt.Println("batch read " + strconv.Itoa(len(localPacketList)) + " packets : clientReceivedIncomingPacket")
+				for _, p = range localPacketList {
+					msg := p.msg
+					if ret.reqNewPacket {
+						ret.reqNewPacket = false
+						ret.dataGetMsg <- msg
+					} else {
+						ret.receivedDataPacket = append(ret.receivedDataPacket, p)
+					}
 				}
+
 			case no := <-ret.clientExit:
 				c, ok := ret.connectIdList[no]
 				if !ok {
@@ -148,6 +161,7 @@ func (s *server) Read() (int, []byte, error) {
 		decodeString(msg.Payload, &str)
 		return msg.ConnID, nil, errors.New(str)
 	}
+	fmt.Printf("%s read %v\n", s.name, msg)
 	return msg.ConnID, msg.Payload, nil
 }
 

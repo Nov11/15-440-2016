@@ -167,7 +167,7 @@ func (ts *closeTestSystem) createServer() error {
 }
 
 func (ts *closeTestSystem) createClient(index int) error {
-	cli, err := NewClient(lspnet.JoinHostPort("localhost", strconv.Itoa(ts.port)), ts.params)
+	cli, err := NewClient(lspnet.JoinHostPort("localhost", strconv.Itoa(ts.port)), ts.params, "client " + strconv.Itoa(index))
 	ts.clients[index] = cli
 	return err
 }

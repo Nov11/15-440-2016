@@ -24,11 +24,11 @@ func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPA
 	ret := &writerWithWindow{
 		windowSize:    windowSize,
 		cmdShutdown:   make(chan CloseCmd),
-		newMessage:    make(chan *Message),
+		newMessage:    make(chan *Message, 1000),
 		conn:          conn,
 		remoteAddress: addr,
-		ack:           make(chan int),
-		cmdResend:     make(chan int),
+		ack:           make(chan int, 10),
+		cmdResend:     make(chan int, 1),
 		returnChannel: signalExit,
 		name:          name,
 	}
@@ -39,7 +39,7 @@ func (www *writerWithWindow) start() {
 	go func() {
 		var globalError error
 		defer func() {
-			fmt.Println("!!!!! writer exit" + www.name)
+			fmt.Println("!!!!! writer exit " + www.name)
 			www.returnChannel <- globalError
 		}()
 		stop := false
@@ -54,17 +54,22 @@ func (www *writerWithWindow) start() {
 					www.windowSize = 99999
 				}
 			case msg := <-www.newMessage:
-				if stop == true {
-					continue
+				list := []*Message{msg}
+				list = append(list, readAllMsgs(www.newMessage)...)
+				for _, msg = range list {
+					if stop == true {
+						break
+					}
+					if msg.Type != MsgData {
+						fmt.Println("!!!!")
+					}
+					www.pendingMessage = append(www.pendingMessage, msg)
 				}
-				if msg.Type != MsgData {
-					fmt.Println("!!!!")
-				}
-				www.pendingMessage = append(www.pendingMessage, msg)
+
 			case number := <-www.ack:
 				for i := 0; i < www.needAck; i++ {
 					if www.pendingMessage[i].SeqNum == number {
-						fmt.Printf(www.name + " message sent %v has been acked\n", www.pendingMessage[i])
+						fmt.Printf(www.name+" message sent %v has been acked\n", www.pendingMessage[i])
 						www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
 						www.needAck--
 						break
@@ -80,7 +85,7 @@ func (www *writerWithWindow) start() {
 					}
 				}
 			default:
-				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize {
+				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize && www.needAck < len(www.pendingMessage) {
 					err := www.writeMessage(www.pendingMessage[www.needAck])
 					if err != nil {
 						str := err.Error() + ": close writer" + www.name

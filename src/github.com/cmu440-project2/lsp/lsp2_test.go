@@ -85,7 +85,7 @@ func newWindowTestSystem(t *testing.T, mode windowTestMode, numClients, numMsgs 
 	// Start up the clients.
 	hostport := lspnet.JoinHostPort("localhost", strconv.Itoa(port))
 	for i := 0; i < ts.numClients; i++ {
-		cli, err := NewClient(hostport, ts.params)
+		cli, err := NewClient(hostport, ts.params, "client" + strconv.Itoa(i))
 		if err != nil {
 			ts.t.Fatalf("Failed to create client: %s", err)
 		}

@@ -48,3 +48,31 @@ func checkError(err error) {
 type CloseCmd struct {
 	reason string
 }
+
+func readAllPackets(c chan *Packet) []*Packet {
+	var localPacketList []*Packet
+DONE:
+	for {
+		select {
+		case p := <-c:
+			localPacketList = append(localPacketList, p)
+		default:
+			break DONE
+		}
+	}
+	return localPacketList
+}
+
+func readAllMsgs(c chan *Message) []*Message {
+	var localPacketList []*Message
+DONE:
+	for {
+		select {
+		case p := <-c:
+			localPacketList = append(localPacketList, p)
+		default:
+			break DONE
+		}
+	}
+	return localPacketList
+}

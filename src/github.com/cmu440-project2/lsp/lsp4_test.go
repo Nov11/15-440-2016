@@ -241,7 +241,7 @@ func (ts *syncTestSystem) runServer() {
 func (ts *syncTestSystem) runClient(clienti int) {
 	t := ts.t
 	hostport := lspnet.JoinHostPort("localhost", strconv.Itoa(ts.port))
-	cli, err := NewClient(hostport, ts.params)
+	cli, err := NewClient(hostport, ts.params, "client " + strconv.Itoa(clienti))
 	if err != nil {
 		t.Errorf("Couldn't create client %d to server at %s", clienti, hostport)
 		ts.errChan <- fmt.Errorf("couldn't create client %d to server at %s", clienti, hostport)

@@ -60,7 +60,7 @@ func (c *client) closeChannels() {
 //
 // hostport is a colon-separated string identifying the server's host address
 // and port number (i.e., "localhost:9999").
-func NewClient(hostport string, params *Params) (*client, error) {
+func NewClient(hostport string, params *Params, name string) (*client, error) {
 	address, err := lspnet.ResolveUDPAddr("udp", hostport)
 	if err != nil {
 		return nil, err
@@ -75,9 +75,9 @@ func NewClient(hostport string, params *Params) (*client, error) {
 	//prepare protocol connection message
 	msg := encode(NewConnect())
 	//fire up read routine
-	dataIncomingPacket := make(chan *Packet)
+	dataIncomingPacket := make(chan *Packet, 1000)
 	signalReaderClosed := make(chan error)
-	go readSocketWithAddress(conn, dataIncomingPacket, signalReaderClosed, "client")
+	go readSocketWithAddress(conn, dataIncomingPacket, signalReaderClosed, name)
 	//send connection message and wait for server's reply
 	id, err := protocolConnect(msg, conn, params, dataIncomingPacket)
 	if err != nil {
@@ -86,26 +86,30 @@ func NewClient(hostport string, params *Params) (*client, error) {
 	}
 
 	fmt.Println("connected to server")
-	ret := createNewClient(id, params, nil, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil, "client")
+	ret := createNewClient(id, params, nil, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil, name)
 	return ret, nil
 }
 
 //maintain message in seq order. cause application needs message to be read in serial order
-func (c *client) appendNewReceivedMessage(msg *Message) {
+func (c *client) appendNewReceivedMessage(msg *Message) bool {
+	if msg.SeqNum <= c.previousSeqNumReturnedToApp {
+		return false
+	}
 	for i := 0; i < len(c.receiveMessageQueue); i++ {
 		if c.receiveMessageQueue[i].SeqNum == msg.SeqNum {
 			fmt.Println(c.name + " appendNewReceivedMessage ignore duplicate message with same seq num :" + strconv.Itoa(msg.SeqNum))
-			return
+			return false
 		} else if c.receiveMessageQueue[i].SeqNum > msg.SeqNum {
 			fmt.Println(c.name + " appendNewReceivedMessage prepend seq num :" + strconv.Itoa(msg.SeqNum))
 			tmp := c.receiveMessageQueue[i:]
 			c.receiveMessageQueue = append(c.receiveMessageQueue[:i], msg)
 			c.receiveMessageQueue = append(c.receiveMessageQueue, tmp...)
-			return
+			return true
 		}
 	}
 	fmt.Println(c.name + " appendNewReceivedMessage append seq num :" + strconv.Itoa(msg.SeqNum))
 	c.receiveMessageQueue = append(c.receiveMessageQueue, msg)
+	return true
 }
 
 //return next message if already received that message, or return nil
@@ -113,10 +117,10 @@ func (c *client) getNextMessage() *Message {
 	if len(c.receiveMessageQueue) == 0 {
 		return nil
 	}
-	for i := 0; i < len(c.receiveMessageQueue); i++ {
+	for i := 0; i < len(c.receiveMessageQueue) && c.receiveMessageQueue[i].SeqNum <= c.previousSeqNumReturnedToApp+1; i++ {
 		if c.receiveMessageQueue[i].SeqNum == c.previousSeqNumReturnedToApp+1 {
 			ret := c.receiveMessageQueue[i]
-			c.receiveMessageQueue = c.receiveMessageQueue[i:]
+			c.receiveMessageQueue = c.receiveMessageQueue[i+1:]
 			c.previousSeqNumReturnedToApp++
 			return ret
 		}
@@ -286,7 +290,7 @@ func createNewClient(connectionId int,
 		dataIncomingPacket:          dataIncomingPacket,
 		receiveMessageQueue:         nil,
 		cmdReadNewestMessage:        make(chan int),
-		dataNewestMessage:           make(chan *Message),
+		dataNewestMessage:           make(chan *Message, 100),
 		previousSeqNumReturnedToApp: 0,
 		signalWriterClosed:          make(chan error, 1),
 		signalReaderClosed:          signalReaderClosed,
@@ -296,7 +300,7 @@ func createNewClient(connectionId int,
 		name:                        name,
 	}
 	if dataIncomingPacket == nil {
-		ret.dataIncomingPacket = make(chan *Packet)
+		ret.dataIncomingPacket = make(chan *Packet, 1000)
 	}
 	if signalReaderClosed == nil {
 		ret.signalReaderClosed = make(chan error)
@@ -351,12 +355,12 @@ func createNewClient(connectionId int,
 					//update epoch timeout count
 					dataMessageInThisEpoch++
 					//push to receiveMessage queue
-					ret.appendNewReceivedMessage(receiveMsg)
+					isNewMsg := ret.appendNewReceivedMessage(receiveMsg)
 					//send ack for this data message
 					ack := NewAck(ret.connectionId, receiveMsg.SeqNum)
 					writer.add(ack)
 					go func() {
-						if ret.dataPacketSideWay != nil {
+						if isNewMsg && ret.dataPacketSideWay != nil{
 							ret.dataPacketSideWay <- p
 						}
 					}()

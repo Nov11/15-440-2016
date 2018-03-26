@@ -57,8 +57,8 @@ func readSocketWithAddress(conn *lspnet.UDPConn, dataOut chan *Packet, signalRea
 		signalReaderClosed <- globalError
 	}()
 
+	buffer := make([]byte, 1024)
 	for {
-		buffer := make([]byte, 1024)
 		n, addr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			fmt.Println(err.Error())
