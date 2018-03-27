@@ -27,7 +27,7 @@ func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPA
 		newMessage:    make(chan *Message, 1000),
 		conn:          conn,
 		remoteAddress: addr,
-		ack:           make(chan int, 10),
+		ack:           make(chan int, 100),
 		cmdResend:     make(chan int, 1),
 		returnChannel: signalExit,
 		name:          name,
@@ -76,6 +76,7 @@ func (www *writerWithWindow) start() {
 					}
 				}
 			case <-www.cmdResend:
+				fmt.Println(www.name + " resend start");
 				for i := 0; i < www.needAck; i++ {
 					err := www.writeMessage(www.pendingMessage[i])
 					if err != nil {
@@ -84,6 +85,7 @@ func (www *writerWithWindow) start() {
 						break
 					}
 				}
+				fmt.Println(www.name + " resend end");
 			default:
 				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize && www.needAck < len(www.pendingMessage) {
 					err := www.writeMessage(www.pendingMessage[www.needAck])

@@ -290,7 +290,7 @@ func createNewClient(connectionId int,
 		dataIncomingPacket:          dataIncomingPacket,
 		receiveMessageQueue:         nil,
 		cmdReadNewestMessage:        make(chan int),
-		dataNewestMessage:           make(chan *Message, 100),
+		dataNewestMessage:           make(chan *Message, 1000),
 		previousSeqNumReturnedToApp: 0,
 		signalWriterClosed:          make(chan error, 1),
 		signalReaderClosed:          signalReaderClosed,
@@ -365,7 +365,7 @@ func createNewClient(connectionId int,
 						writer.add(ack)
 						go func(ptrCopy *Packet) {
 							if isNewMsg && ret.dataPacketSideWay != nil{
-								fmt.Printf("push into server thread : %v\n", ptrCopy)
+								//fmt.Printf("push into server thread : %v\n", ptrCopy)
 								ret.dataPacketSideWay <- ptrCopy
 							}
 						}(p)

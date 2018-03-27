@@ -65,7 +65,7 @@ func NewServer(port int, params *Params) (Server, error) {
 		dataIncomingPacket:               make(chan *Packet, 1000),
 		cmdGetMsg:                        make(chan int),
 		dataGetMsg:                       make(chan *Message, 1000),
-		clientReceivedDataIncomingPacket: make(chan *Packet, 1000),
+		clientReceivedDataIncomingPacket: make(chan *Packet, 5000),
 		cmdGetClient:                     make(chan int),
 		dataClient:                       make(chan *client),
 		clientExit:                       make(chan int),
@@ -115,36 +115,42 @@ func NewServer(port int, params *Params) (Server, error) {
 				}
 				ret.dataClient <- c
 			case <-ret.cmdGetMsg:
-				if len(ret.dataGetMsg) > 0 {
-					continue
-				}
 				ret.reqNewPacket = true
-			ENDGETMSG:
-				for len(ret.receivedDataPacket) > 0 {
+				if len(ret.clientReceivedDataIncomingPacket) > 0 {
 					ret.reqNewPacket = false
-					p := ret.receivedDataPacket[0]
-					ret.receivedDataPacket = ret.receivedDataPacket[1:]
-					select {
-					case ret.dataGetMsg <- p.msg:
-					default:
-						break ENDGETMSG
-					}
-
+					packet := <-ret.clientReceivedDataIncomingPacket
+					ret.dataGetMsg <- packet.msg
 				}
-			case p := <-ret.clientReceivedDataIncomingPacket:
-				localPacketList := []*Packet{p}
-				localPacketList = append(localPacketList, readAllPackets(ret.clientReceivedDataIncomingPacket)...)
-				fmt.Println("batch read " + strconv.Itoa(len(localPacketList)) + " packets : clientReceivedIncomingPacket")
-				for _, p = range localPacketList {
-					msg := p.msg
-					fmt.Println(ret.name + " " + msg.String() + " message : clientReceivedIncomingPacket")
-					if ret.reqNewPacket {
-						ret.reqNewPacket = false
-						ret.dataGetMsg <- msg
-					} else {
-						ret.receivedDataPacket = append(ret.receivedDataPacket, p)
-					}
-				}
+				//	if len(ret.dataGetMsg) > 0 {
+				//		continue
+				//	}
+				//	ret.reqNewPacket = true
+				//ENDGETMSG:
+				//	for len(ret.receivedDataPacket) > 0 {
+				//		ret.reqNewPacket = false
+				//		p := ret.receivedDataPacket[0]
+				//		ret.receivedDataPacket = ret.receivedDataPacket[1:]
+				//		select {
+				//		case ret.dataGetMsg <- p.msg:
+				//		default:
+				//			break ENDGETMSG
+				//		}
+				//
+				//	}
+				//case p := <-ret.clientReceivedDataIncomingPacket:
+				//	localPacketList := []*Packet{p}
+				//	localPacketList = append(localPacketList, readAllPackets(ret.clientReceivedDataIncomingPacket)...)
+				//	fmt.Println("batch read " + strconv.Itoa(len(localPacketList)) + " packets : clientReceivedIncomingPacket")
+				//	for _, p = range localPacketList {
+				//		msg := p.msg
+				//		fmt.Println(ret.name + " " + msg.String() + " message : clientReceivedIncomingPacket")
+				//		if ret.reqNewPacket {
+				//			ret.reqNewPacket = false
+				//			ret.dataGetMsg <- msg
+				//		} else {
+				//			ret.receivedDataPacket = append(ret.receivedDataPacket, p)
+				//		}
+				//	}
 
 			case no := <-ret.clientExit:
 				c, ok := ret.connectIdList[no]
@@ -154,6 +160,12 @@ func NewServer(port int, params *Params) (Server, error) {
 				addr := c.remoteAddress
 				delete(ret.address2ConnectionId, addr.String())
 				delete(ret.connectIdList, no)
+			default:
+				if ret.reqNewPacket && len(ret.clientReceivedDataIncomingPacket) > 0 {
+					ret.reqNewPacket = false
+					packet := <-ret.clientReceivedDataIncomingPacket
+					ret.dataGetMsg <- packet.msg
+				}
 			}
 
 		}
