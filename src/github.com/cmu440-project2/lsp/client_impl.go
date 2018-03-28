@@ -93,6 +93,14 @@ func NewClient(hostport string, params *Params, name string) (*client, error) {
 
 //maintain message in seq order. cause application needs message to be read in serial order
 func (c *client) appendNewReceivedMessage(msg *Message) bool {
+	defer func() {
+		num := ""
+		for i := 0; i < len(c.receiveMessageQueue); i++ {
+			num += strconv.Itoa(c.receiveMessageQueue[i].SeqNum)
+			num += " "
+		}
+		fmt.Println(num)
+	}()
 	if msg.SeqNum <= c.previousSeqNumReturnedToApp {
 		return false
 	}
@@ -102,9 +110,7 @@ func (c *client) appendNewReceivedMessage(msg *Message) bool {
 			return false
 		} else if c.receiveMessageQueue[i].SeqNum > msg.SeqNum {
 			fmt.Println(c.name + " appendNewReceivedMessage prepend seq num :" + strconv.Itoa(msg.SeqNum))
-			tmp := c.receiveMessageQueue[i:]
-			c.receiveMessageQueue = append(c.receiveMessageQueue[:i], msg)
-			c.receiveMessageQueue = append(c.receiveMessageQueue, tmp...)
+			c.receiveMessageQueue = append(c.receiveMessageQueue[:i], append([]*Message{msg}, c.receiveMessageQueue[i:]...)...)
 			return true
 		}
 	}
@@ -131,6 +137,7 @@ func (c *client) getNextMessage() *Message {
 }
 
 func (c *client) unGetMessage(msg *Message) {
+	fmt.Println("!!!!!unget " + msg.String())
 	if len(c.receiveMessageQueue) > 0 && c.receiveMessageQueue[0].SeqNum <= msg.SeqNum {
 		fmt.Printf("cannot unget a message with seq num:%v  while the first in the front : %v\n", msg.SeqNum, c.receiveMessageQueue[0].SeqNum)
 		os.Exit(1)
@@ -189,7 +196,7 @@ func (c *client) Read() ([]byte, error) {
 }
 
 func (c *client) Write(payload []byte) error {
-	fmt.Printf("%v Write interface call with %v\n", c.name, payload)
+	fmt.Printf("%v Write interface call with %v\n", c.name, string(payload))
 	return c.WriteImpl(payload, MsgData)
 }
 
@@ -208,7 +215,7 @@ func (c *client) WriteImpl(payload []byte, msgType MsgType) error {
 	} else {
 		msg = NewData(0, 0, len(payload), payload)
 	}
-	c.writer.asyncWrite(msg)
+	c.writer.seqWrite(msg)
 	return nil
 }
 

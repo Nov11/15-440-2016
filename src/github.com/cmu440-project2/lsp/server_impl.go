@@ -156,7 +156,7 @@ func (s *server) Write(connID int, payload []byte) error {
 	if !ok {
 		return errors.New("connection not exists : id :" + strconv.Itoa(connID))
 	}
-	go func() { c.Write(payload) }()
+	c.Write(payload)
 	return nil
 }
 

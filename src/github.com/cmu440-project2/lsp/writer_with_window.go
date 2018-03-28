@@ -157,6 +157,10 @@ func (www *writerWithWindow) asyncWrite(msg *Message) {
 	go func() { www.newMessage <- msg }()
 }
 
+func (www *writerWithWindow) seqWrite(msg *Message) {
+	www.newMessage <- msg
+}
+
 func (www *writerWithWindow) getAck(number int) {
 	go func() { www.ack <- number }()
 }
