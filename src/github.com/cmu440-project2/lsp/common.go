@@ -76,3 +76,17 @@ DONE:
 	}
 	return localPacketList
 }
+
+func readAllInt(c chan int) []int{
+	var localPacketList []int
+DONE:
+	for {
+		select {
+		case p := <-c:
+			localPacketList = append(localPacketList, p)
+		default:
+			break DONE
+		}
+	}
+	return localPacketList
+}

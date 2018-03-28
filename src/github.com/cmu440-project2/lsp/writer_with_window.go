@@ -7,6 +7,7 @@ import (
 )
 
 var WWWLENGTH int = 2000
+
 type writerWithWindow struct {
 	pendingMessage     []*Message
 	needAck            int
@@ -83,16 +84,21 @@ func (www *writerWithWindow) start() {
 					}
 					www.pendingMessage = append(www.pendingMessage, msg)
 				}
-
+				www.output()
 			case number := <-www.ack:
-				for i := 0; i < www.needAck; i++ {
-					if www.pendingMessage[i].SeqNum == number {
-						fmt.Printf(www.name+" message sent %v has been acked\n", www.pendingMessage[i])
-						www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
-						www.needAck--
-						break
+				list := []int{number}
+				list = append(list, readAllInt(www.ack)...)
+				for _, n := range list {
+					for i := 0; i < www.needAck; i++ {
+						if www.pendingMessage[i].SeqNum == n {
+							fmt.Printf(www.name+" message sent %v has been acked\n", www.pendingMessage[i])
+							www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
+							www.needAck--
+							break
+						}
 					}
 				}
+				www.output()
 			case <-www.cmdResend:
 				fmt.Println(www.name + " resend start");
 				for i := 0; i < www.needAck; i++ {
@@ -104,22 +110,28 @@ func (www *writerWithWindow) start() {
 					}
 				}
 				fmt.Println(www.name + " resend end");
-			default:
-				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize && www.needAck < len(www.pendingMessage) {
-					err := www.writeMessageBlocking(www.pendingMessage[www.needAck])
-					if err != nil {
-						str := err.Error() + ": close writer" + www.name
-						fmt.Println(str)
-						cmd := CloseCmd{reason: str}
-						go func() { www.cmdShutdown <- cmd }()
-						break
-					}
-					www.needAck++
-				}
+			//default:
+
 			}
 		}
 
 	}()
+}
+
+func (www *writerWithWindow) output() {
+	for len(www.pendingMessage) > 0 && www.needAck < www.windowSize && www.needAck < len(www.pendingMessage) {
+		go func(msg *Message) {
+			err := www.writeMessageBlocking(msg)
+			if err != nil {
+				str := err.Error() + ": close writer" + www.name
+				fmt.Println(str)
+				cmd := CloseCmd{reason: str}
+				www.cmdShutdown <- cmd
+			}
+		}(www.pendingMessage[www.needAck])
+
+		www.needAck++
+	}
 }
 
 func (www *writerWithWindow) writeMessageBlocking(message *Message) error {

@@ -20,6 +20,10 @@ import (
 	"time"
 
 	"github.com/cmu440-project2/lspnet"
+	"os"
+	"log"
+	"path/filepath"
+	"runtime/pprof"
 )
 
 type testSystem struct {
@@ -54,7 +58,14 @@ func (ts *testSystem) setDropPercent(p int) *testSystem {
 	ts.dropPercent = p
 	return ts
 }
-
+func pwd() string {
+	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(dir)
+	return dir
+}
 func newTestSystem(t *testing.T, numClients int, params *Params) *testSystem {
 	ts := new(testSystem)
 	ts.t = t
@@ -175,6 +186,7 @@ func (ts *testSystem) runTest(timeout int) {
 	for _ = range ts.clients {
 		select {
 		case <-timeoutChan:
+			pprof.StopCPUProfile()
 			close(ts.exitChan)
 			ts.t.Fatalf("Test timed out after %.2f secs", float64(timeout)/1000.0)
 		case ok := <-clientDoneChan:
@@ -199,9 +211,17 @@ func makeParams(epochLimit, epochMillis, windowSize int) *Params {
 }
 
 func TestBasic1(t *testing.T) {
+	pwd()
+	f, cerr := os.Create("profoutput")
+	if cerr != nil {
+		log.Fatal(cerr)
+	}
+	fmt.Println(f.Name())
+	pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
 	newTestSystem(t, 1, makeParams(5, 2000, 1)).
 		setDescription("TestBasic1: Short client/server interaction").
-		setNumMsgs(3).
+		setNumMsgs(3000).
 		runTest(2000)
 }
 
