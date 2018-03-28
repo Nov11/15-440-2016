@@ -78,35 +78,35 @@ func NewServer(port int, params *Params) (Server, error) {
 				//fmt.Println(ret.name + " batch read " + strconv.Itoa(len(localPacketList)) + " packets:dataIncomingPacket")
 				//for _, item := range localPacketList {
 				//	go func(packet *Packet) {
-						fmt.Printf("%s received packet:%v\n", ret.name, packet)
-						msg := packet.msg
-						addr := packet.addr
+				fmt.Printf("%s received packet:%v\n", ret.name, packet)
+				msg := packet.msg
+				addr := packet.addr
 
-						if msg.Type == MsgConnect {
-							ret.mtx.Lock()
-							if _, exist := ret.address2ConnectionId[addr.String()]; !exist {
-								id := ret.nextConnectionId
-								ret.nextConnectionId++
-								ret.address2ConnectionId[addr.String()] = id
-								ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit, ret.name+strconv.Itoa(ret.clientNumber))
-								ret.clientNumber++
-							}
-							id := ret.address2ConnectionId[addr.String()]
-							c := ret.connectIdList[id]
-							c.WriteImpl(nil, MsgAck)
-							ret.mtx.Unlock()
-						} else {
-							ret.mtx.RLock()
-							c, ok := ret.connectIdList[msg.ConnID]
-							ret.mtx.RUnlock()
-							if !ok {
-								//ignore
-								fmt.Printf("ignore packet %v as there's no related worker", packet)
-								return
-							}
-							c.appendPacket(packet)
-						}
-					//}(item)
+				if msg.Type == MsgConnect {
+					ret.mtx.Lock()
+					if _, exist := ret.address2ConnectionId[addr.String()]; !exist {
+						id := ret.nextConnectionId
+						ret.nextConnectionId++
+						ret.address2ConnectionId[addr.String()] = id
+						ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit, ret.name+strconv.Itoa(ret.clientNumber), nil)
+						ret.clientNumber++
+					}
+					id := ret.address2ConnectionId[addr.String()]
+					c := ret.connectIdList[id]
+					c.WriteImpl(nil, MsgAck)
+					ret.mtx.Unlock()
+				} else {
+					ret.mtx.RLock()
+					c, ok := ret.connectIdList[msg.ConnID]
+					ret.mtx.RUnlock()
+					if !ok {
+						//ignore
+						fmt.Printf("ignore packet %v as there's no related worker", packet)
+						return
+					}
+					c.appendPacket(packet)
+				}
+				//}(item)
 				//}
 
 			case no := <-ret.clientExit:

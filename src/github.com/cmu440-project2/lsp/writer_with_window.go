@@ -100,7 +100,7 @@ func (www *writerWithWindow) start() {
 				}
 				www.output()
 			case <-www.cmdResend:
-				fmt.Printf("%v resend start: [%v,%v]\n", www.name, 0, www.needAck)
+				fmt.Printf("%v resend start: [%v,%v](window index)\n", www.name, 0, www.needAck)
 				for i := 0; i < www.needAck; i++ {
 					err := www.writeMessageBlocking(www.pendingMessage[i])
 					if err != nil {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 	"strconv"
+	"os"
 )
 
 var LENGTH int = 1000
@@ -86,7 +87,7 @@ func NewClient(hostport string, params *Params, name string) (*client, error) {
 	}
 
 	fmt.Println("connected to server")
-	ret := createNewClient(id, params, nil, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil, name)
+	ret := createNewClient(id, params, nil, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil, name, make(chan *Message, 10))
 	return ret, nil
 }
 
@@ -127,6 +128,18 @@ func (c *client) getNextMessage() *Message {
 	}
 
 	return nil
+}
+
+func (c *client) unGetMessage(msg *Message) {
+	if len(c.receiveMessageQueue) > 0 && c.receiveMessageQueue[0].SeqNum <= msg.SeqNum {
+		fmt.Printf("cannot unget a message with seq num:%v  while the first in the front : %v\n", msg.SeqNum, c.receiveMessageQueue[0].SeqNum)
+		os.Exit(1)
+	}
+	if msg.SeqNum+1 != c.previousSeqNumReturnedToApp {
+		fmt.Printf("unget msg with unexpected seq num: %v , should be:%v\n", msg.SeqNum, c.previousSeqNumReturnedToApp-1)
+	}
+	c.receiveMessageQueue = append([]*Message{msg}, c.receiveMessageQueue...)
+	c.previousSeqNumReturnedToApp--
 }
 
 func verify(msg *Message, c *client) bool {
@@ -256,7 +269,8 @@ func createNewClient(connectionId int,
 	sendDataPacket chan *Packet,
 	shareSocket bool,
 	clientExit chan int,
-	name string) *client {
+	name string,
+	dataNewestMessage chan *Message) *client {
 	ret := &client{
 		connectionId:                connectionId,
 		params:                      params,
@@ -267,7 +281,7 @@ func createNewClient(connectionId int,
 		clientHasFullyClosedDown:    make(chan error),
 		dataIncomingPacket:          dataIncomingPacket,
 		receiveMessageQueue:         nil,
-		dataNewestMessage:           make(chan *Message, 10),
+		dataNewestMessage:           dataNewestMessage,
 		previousSeqNumReturnedToApp: 0,
 		signalWriterClosed:          make(chan error, 1),
 		signalReaderClosed:          signalReaderClosed,
@@ -353,29 +367,40 @@ func createNewClient(connectionId int,
 					//update epoch timeout count
 					ret.dataMessageInThisEpoch++
 					//push to receiveMessage queue
-					isNewMsg := ret.appendNewReceivedMessage(receiveMsg)
+					ret.appendNewReceivedMessage(receiveMsg)
 					//send ack for this data message
 					ack := NewAck(ret.connectionId, receiveMsg.SeqNum)
 					writer.asyncWrite(ack)
-					go func(ptrCopy *Packet) {
-						if isNewMsg && ret.dataPacketSideWay != nil {
-							//fmt.Printf("push into server thread : %v\n", ptrCopy)
-							ret.dataPacketSideWay <- ptrCopy
-						}
-					}(packet)
+				}
 
-					//if ret.reqReadMsg == true {
-					for len(ret.dataNewestMessage) < cap(ret.dataNewestMessage) {
-						nextMsg := ret.getNextMessage()
-						if nextMsg != nil {
-							//ret.reqReadMsg = false
-							ret.dataNewestMessage <- nextMsg
-						} else {
-							break
-						}
+				if ret.dataNewestMessage != nil && ret.dataPacketSideWay != nil {
+					fmt.Println("cannot be worker and 'client' at same time")
+					os.Exit(1)
+				}
+				//for pure client
+				for len(ret.dataNewestMessage) < cap(ret.dataNewestMessage) {
+					nextMsg := ret.getNextMessage()
+					if nextMsg != nil {
+						//ret.reqReadMsg = false
+						ret.dataNewestMessage <- nextMsg
+					} else {
+						break
 					}
-					//}
-					//}(p)
+				}
+				//for worker
+			WORKERLOOP:
+				for {
+					nextMsg := ret.getNextMessage()
+					if nextMsg == nil {
+						break
+					}
+					tmp := &Packet{msg: nextMsg}
+					select {
+					case ret.dataPacketSideWay <- tmp:
+					default:
+						ret.unGetMessage(nextMsg)
+						break WORKERLOOP
+					}
 				}
 			case <-timeOut:
 				fmt.Println(ret.name + " TIME OUT");
