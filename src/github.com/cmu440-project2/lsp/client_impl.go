@@ -38,6 +38,7 @@ type client struct {
 	clientExit                  chan int
 	name                        string
 	dataMessageInThisEpoch      int
+	ackMessageInThisEpoch       int
 }
 
 func (c *client) closeChannels() {
@@ -166,7 +167,8 @@ func (c *client) Read() ([]byte, error) {
 		}
 	}()
 	msg, ok := <-c.dataNewestMessage
-	fmt.Println(c.name + " clientread : pending msg " + strconv.Itoa(len(c.dataNewestMessage)))
+	fmt.Printf("%v get newest Message : %v %v\n", c.name, msg, ok)
+	fmt.Println(c.name + " client read interface method : pending msg " + strconv.Itoa(len(c.dataNewestMessage)))
 	if ok == true {
 		return msg.Payload, nil
 	}
@@ -174,6 +176,7 @@ func (c *client) Read() ([]byte, error) {
 }
 
 func (c *client) Write(payload []byte) error {
+	fmt.Printf("%v Write interface call with %v\n", c.name, payload)
 	return c.WriteImpl(payload, MsgData)
 }
 
@@ -273,6 +276,7 @@ func createNewClient(connectionId int,
 		clientExit:                  clientExit,
 		name:                        name,
 		dataMessageInThisEpoch:      0,
+		ackMessageInThisEpoch:       0,
 	}
 	if ret.dataIncomingPacket == nil {
 		ret.dataIncomingPacket = make(chan *Packet, LENGTH)
@@ -285,7 +289,7 @@ func createNewClient(connectionId int,
 			conn,
 			address,
 			ret.signalWriterClosed,
-			ret.name+"'s www",
+			ret.name+" 's www",
 			connectionId)
 	writer.start()
 	ret.writer = writer
@@ -306,6 +310,7 @@ func createNewClient(connectionId int,
 		for {
 			select {
 			case cmd := <-ret.cmdClientClose:
+				fmt.Println(ret.name + " close command " + cmd.reason)
 				ret.mtx.Lock()
 				if ret.closed == false {
 					ret.closeReason = cmd.reason
@@ -327,7 +332,7 @@ func createNewClient(connectionId int,
 				for _, packet := range list {
 					//go func(packet *Packet) {
 					receiveMsg := packet.msg
-					fmt.Printf(ret.name+"read msg from socket: %v\n", receiveMsg)
+					fmt.Printf(ret.name+" read msg from socket: %v\n", receiveMsg)
 					//validate
 					if !verify(receiveMsg, ret) {
 						fmt.Printf("msg : %v mal formatted", receiveMsg)
@@ -335,9 +340,12 @@ func createNewClient(connectionId int,
 					}
 
 					if receiveMsg.Type == MsgConnect {
+						//no one should connect to a client. connection establishment is in server loop, not here.
 						fmt.Println("received connection message. ignore")
 						continue
 					} else if receiveMsg.Type == MsgAck {
+						//update epoch timeout count page7 says 'any kind'
+						ret.ackMessageInThisEpoch++
 						writer.getAck(receiveMsg.SeqNum)
 						continue
 					}
@@ -361,7 +369,6 @@ func createNewClient(connectionId int,
 						nextMsg := ret.getNextMessage()
 						if nextMsg != nil {
 							//ret.reqReadMsg = false
-							fmt.Println("returning newest message")
 							ret.dataNewestMessage <- nextMsg
 						} else {
 							break
@@ -372,22 +379,23 @@ func createNewClient(connectionId int,
 				}
 			case <-timeOut:
 				fmt.Println(ret.name + " TIME OUT");
-				if ret.dataMessageInThisEpoch != 0 {
+				if ret.dataMessageInThisEpoch+ret.ackMessageInThisEpoch != 0 {
 					timeOutCntLeft = ret.params.EpochLimit
 				} else {
 					timeOutCntLeft--
 					if timeOutCntLeft == 0 {
-						fmt.Println("client closing : no data message after epoch limit exceeded : ")
-						cmd := CloseCmd{reason: "no data message received after epoch limit exceeded"}
+						fmt.Println(ret.name + " closing : no data message after epoch [limit exceeded] : ")
+						cmd := CloseCmd{reason: "no data message received after epoch [limit exceeded]"}
 						go func() {
 							ret.cmdClientClose <- cmd
 						}()
 					}
+				}
+				if ret.dataMessageInThisEpoch == 0 {
 					//resend ack <de>of the last received data message</del>
 					zeroAck := NewAck(ret.connectionId, 0)
-					fmt.Println("send keep alive")
+					fmt.Println(ret.name + " send keep alive")
 					writer.asyncWrite(zeroAck)
-					//writer.asyncWrite()
 				}
 				// if there is msg that hasn't receive ack
 				// resend that packet
@@ -395,6 +403,7 @@ func createNewClient(connectionId int,
 				//reset epoch counters
 				timeOut = time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
 				ret.dataMessageInThisEpoch = 0
+				ret.ackMessageInThisEpoch = 0
 			case err, ok := <-ret.signalWriterClosed:
 				fmt.Println("writer closed")
 				//I never write to this, how can it wake up ?

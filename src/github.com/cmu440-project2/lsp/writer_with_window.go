@@ -100,7 +100,7 @@ func (www *writerWithWindow) start() {
 				}
 				www.output()
 			case <-www.cmdResend:
-				fmt.Println(www.name + " resend start");
+				fmt.Printf("%v resend start: [%v,%v]\n", www.name, 0, www.needAck)
 				for i := 0; i < www.needAck; i++ {
 					err := www.writeMessageBlocking(www.pendingMessage[i])
 					if err != nil {
@@ -110,7 +110,7 @@ func (www *writerWithWindow) start() {
 					}
 				}
 				fmt.Println(www.name + " resend end");
-			//default:
+				//default:
 
 			}
 		}

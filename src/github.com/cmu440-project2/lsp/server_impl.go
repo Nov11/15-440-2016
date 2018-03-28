@@ -72,12 +72,12 @@ func NewServer(port int, params *Params) (Server, error) {
 		for {
 			select {
 			case packet := <-ret.dataIncomingPacket:
-				var localPacketList []*Packet
-				localPacketList = append(localPacketList, packet)
-				localPacketList = append(localPacketList, readAllPackets(ret.dataIncomingPacket)...)
-				fmt.Println(ret.name + "batch read " + strconv.Itoa(len(localPacketList)) + " packets:dataIncomingPacket")
-				for _, item := range localPacketList {
-					go func(packet *Packet) {
+				//var localPacketList []*Packet
+				//localPacketList = append(localPacketList, packet)
+				//localPacketList = append(localPacketList, readAllPackets(ret.dataIncomingPacket)...)
+				//fmt.Println(ret.name + " batch read " + strconv.Itoa(len(localPacketList)) + " packets:dataIncomingPacket")
+				//for _, item := range localPacketList {
+				//	go func(packet *Packet) {
 						fmt.Printf("%s received packet:%v\n", ret.name, packet)
 						msg := packet.msg
 						addr := packet.addr
@@ -106,8 +106,8 @@ func NewServer(port int, params *Params) (Server, error) {
 							}
 							c.appendPacket(packet)
 						}
-					}(item)
-				}
+					//}(item)
+				//}
 
 			case no := <-ret.clientExit:
 				c, ok := ret.connectIdList[no]
@@ -125,6 +125,7 @@ func NewServer(port int, params *Params) (Server, error) {
 }
 
 func (s *server) Read() (int, []byte, error) {
+	fmt.Println("server [Read] called")
 	if s.closing {
 		return 0, nil, errors.New("server closed")
 	}

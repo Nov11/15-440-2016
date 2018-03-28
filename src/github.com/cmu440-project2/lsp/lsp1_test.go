@@ -23,7 +23,6 @@ import (
 	"os"
 	"log"
 	"path/filepath"
-	"runtime/pprof"
 )
 
 type testSystem struct {
@@ -93,7 +92,7 @@ func newTestSystem(t *testing.T, numClients int, params *Params) *testSystem {
 	ts.clients = make([]Client, numClients)
 	for i := range ts.clients {
 		hostport := lspnet.JoinHostPort("localhost", strconv.Itoa(port))
-		ts.clients[i], err = NewClient(hostport, params, "client "+strconv.Itoa(i))
+		ts.clients[i], err = NewClient(hostport, params, "client"+strconv.Itoa(i))
 		if err != nil {
 			t.Fatalf("Client failed to connect to server on port %d: %s.", port, err)
 		}
@@ -115,9 +114,11 @@ func (ts *testSystem) runServer() {
 				ts.t.Logf("Server received error during read.")
 				return
 			}
+			fmt.Printf("Server read message %s from client %d.\n", string(data), connID)
 			ts.t.Logf("Server read message %s from client %d.", string(data), connID)
 			ts.randSleep()
 			ts.t.Logf("Server writing %s.", string(data))
+			fmt.Printf("Server writing %s.\n", string(data))
 			ts.server.Write(connID, data)
 		}
 	}
@@ -186,7 +187,7 @@ func (ts *testSystem) runTest(timeout int) {
 	for _ = range ts.clients {
 		select {
 		case <-timeoutChan:
-			pprof.StopCPUProfile()
+			//pprof.StopCPUProfile()
 			close(ts.exitChan)
 			ts.t.Fatalf("Test timed out after %.2f secs", float64(timeout)/1000.0)
 		case ok := <-clientDoneChan:
@@ -211,14 +212,14 @@ func makeParams(epochLimit, epochMillis, windowSize int) *Params {
 }
 
 func TestBasic1(t *testing.T) {
-	pwd()
-	f, cerr := os.Create("profoutput")
-	if cerr != nil {
-		log.Fatal(cerr)
-	}
-	fmt.Println(f.Name())
-	pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
+	//pwd()
+	//f, cerr := os.Create("profoutput")
+	//if cerr != nil {
+	//	log.Fatal(cerr)
+	//}
+	//fmt.Println(f.Name())
+	//pprof.StartCPUProfile(f)
+	//defer pprof.StopCPUProfile()
 	newTestSystem(t, 1, makeParams(5, 2000, 1)).
 		setDescription("TestBasic1: Short client/server interaction").
 		setNumMsgs(3000).
