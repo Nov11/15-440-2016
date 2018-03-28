@@ -12,21 +12,21 @@ import (
 )
 
 type server struct {
-	address                          *lspnet.UDPAddr
-	connection                       *lspnet.UDPConn
-	nextConnectionId                 int
-	connectIdList                    map[int]*client
-	address2ConnectionId             map[string]int
-	closing                          bool
-	signalReaderClosed               chan error
-	dataIncomingPacket               chan *Packet
-	mtx                              sync.Mutex
-	cmdGetClient                     chan int
-	dataClient                       chan *client
-	cmdGetMsg                        chan int
-	receivedDataPacket               []*Packet
-	reqNewPacket                     bool
-	dataGetMsg                       chan *Message
+	address              *lspnet.UDPAddr
+	connection           *lspnet.UDPConn
+	nextConnectionId     int
+	connectIdList        map[int]*client
+	address2ConnectionId map[string]int
+	closing              bool
+	signalReaderClosed   chan error
+	dataIncomingPacket   chan *Packet
+	mtx                  sync.Mutex
+	cmdGetClient         chan int
+	dataClient           chan *client
+	//cmdGetMsg                        chan int
+	receivedDataPacket []*Packet
+	reqNewPacket       bool
+	//dataGetMsg                       chan *Message
 	clientReceivedDataIncomingPacket chan *Packet
 	clientExit                       chan int
 	clientNumber                     int
@@ -55,17 +55,17 @@ func NewServer(port int, params *Params) (Server, error) {
 		return nil, err
 	}
 	ret := server{
-		address:                          address,
-		connection:                       conn,
-		nextConnectionId:                 1,
-		connectIdList:                    make(map[int]*client),
-		address2ConnectionId:             make(map[string]int),
-		closing:                          false,
-		signalReaderClosed:               make(chan error),
-		dataIncomingPacket:               make(chan *Packet, 1000),
-		cmdGetMsg:                        make(chan int),
-		dataGetMsg:                       make(chan *Message, 1000),
-		clientReceivedDataIncomingPacket: make(chan *Packet, 5000),
+		address:              address,
+		connection:           conn,
+		nextConnectionId:     1,
+		connectIdList:        make(map[int]*client),
+		address2ConnectionId: make(map[string]int),
+		closing:              false,
+		signalReaderClosed:   make(chan error),
+		dataIncomingPacket:   make(chan *Packet, 1000),
+		//cmdGetMsg:                        make(chan int),
+		//dataGetMsg:                       make(chan *Message, 1000),
+		clientReceivedDataIncomingPacket: make(chan *Packet, 1000),
 		cmdGetClient:                     make(chan int),
 		dataClient:                       make(chan *client),
 		clientExit:                       make(chan int),
@@ -114,13 +114,13 @@ func NewServer(port int, params *Params) (Server, error) {
 					ret.dataClient <- nil
 				}
 				ret.dataClient <- c
-			case <-ret.cmdGetMsg:
-				ret.reqNewPacket = true
-				if len(ret.clientReceivedDataIncomingPacket) > 0 {
-					ret.reqNewPacket = false
-					packet := <-ret.clientReceivedDataIncomingPacket
-					ret.dataGetMsg <- packet.msg
-				}
+				//case <-ret.cmdGetMsg:
+				//	ret.reqNewPacket = true
+				//	if len(ret.clientReceivedDataIncomingPacket) > 0 {
+				//		ret.reqNewPacket = false
+				//		//packet := <-ret.clientReceivedDataIncomingPacket
+				//		//ret.dataGetMsg <- packet.msg
+				//	}
 				//	if len(ret.dataGetMsg) > 0 {
 				//		continue
 				//	}
@@ -160,12 +160,12 @@ func NewServer(port int, params *Params) (Server, error) {
 				addr := c.remoteAddress
 				delete(ret.address2ConnectionId, addr.String())
 				delete(ret.connectIdList, no)
-			default:
-				if ret.reqNewPacket && len(ret.clientReceivedDataIncomingPacket) > 0 {
-					ret.reqNewPacket = false
-					packet := <-ret.clientReceivedDataIncomingPacket
-					ret.dataGetMsg <- packet.msg
-				}
+				//default:
+				//	if ret.reqNewPacket && len(ret.clientReceivedDataIncomingPacket) > 0 {
+				//		ret.reqNewPacket = false
+				//		packet := <-ret.clientReceivedDataIncomingPacket
+				//		ret.dataGetMsg <- packet.msg
+				//	}
 			}
 
 		}
@@ -177,8 +177,9 @@ func (s *server) Read() (int, []byte, error) {
 	if s.closing {
 		return 0, nil, errors.New("server closed")
 	}
-	s.cmdGetMsg <- 1
-	msg := <-s.dataGetMsg
+	//s.cmdGetMsg <-1
+	p := <-s.clientReceivedDataIncomingPacket
+	msg := p.msg
 	if msg.Type != MsgData {
 		fmt.Printf("%v\n", msg)
 		os.Exit(1)
@@ -200,13 +201,21 @@ func (s *server) Read() (int, []byte, error) {
 func (s *server) Write(connID int, payload []byte) error {
 	s.cmdGetClient <- connID
 	c := <-s.dataClient
-	return c.Write(payload)
+	if c == nil {
+		return errors.New("connection not exists : id :" + strconv.Itoa(connID))
+	}
+	go c.Write(payload)
+	return nil
 }
 
 func (s *server) CloseConn(connID int) error {
 	s.cmdGetClient <- connID
 	c := <-s.dataClient
-	return c.Close()
+	if c == nil {
+		return errors.New("connection not exists : id :" + strconv.Itoa(connID))
+	}
+	go c.Close()
+	return nil
 }
 
 func (s *server) Close() error {
