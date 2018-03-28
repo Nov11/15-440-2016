@@ -12,21 +12,17 @@ import (
 )
 
 type server struct {
-	address              *lspnet.UDPAddr
-	connection           *lspnet.UDPConn
-	nextConnectionId     int
-	connectIdList        map[int]*client
-	address2ConnectionId map[string]int
-	closing              bool
-	signalReaderClosed   chan error
-	dataIncomingPacket   chan *Packet
-	mtx                  sync.Mutex
-	cmdGetClient         chan int
-	dataClient           chan *client
-	//cmdGetMsg                        chan int
-	receivedDataPacket []*Packet
-	reqNewPacket       bool
-	//dataGetMsg                       chan *Message
+	address                          *lspnet.UDPAddr
+	connection                       *lspnet.UDPConn
+	nextConnectionId                 int
+	connectIdList                    map[int]*client
+	address2ConnectionId             map[string]int
+	closing                          bool
+	signalReaderClosed               chan error
+	dataIncomingPacket               chan *Packet
+	mtx                              sync.RWMutex
+	receivedDataPacket               []*Packet
+	reqNewPacket                     bool
 	clientReceivedDataIncomingPacket chan *Packet
 	clientExit                       chan int
 	clientNumber                     int
@@ -55,19 +51,15 @@ func NewServer(port int, params *Params) (Server, error) {
 		return nil, err
 	}
 	ret := server{
-		address:              address,
-		connection:           conn,
-		nextConnectionId:     1,
-		connectIdList:        make(map[int]*client),
-		address2ConnectionId: make(map[string]int),
-		closing:              false,
-		signalReaderClosed:   make(chan error),
-		dataIncomingPacket:   make(chan *Packet, 1000),
-		//cmdGetMsg:                        make(chan int),
-		//dataGetMsg:                       make(chan *Message, 1000),
+		address:                          address,
+		connection:                       conn,
+		nextConnectionId:                 1,
+		connectIdList:                    make(map[int]*client),
+		address2ConnectionId:             make(map[string]int),
+		closing:                          false,
+		signalReaderClosed:               make(chan error),
+		dataIncomingPacket:               make(chan *Packet, 1000),
 		clientReceivedDataIncomingPacket: make(chan *Packet, 1000),
-		cmdGetClient:                     make(chan int),
-		dataClient:                       make(chan *client),
 		clientExit:                       make(chan int),
 		name:                             "server",
 	}
@@ -82,75 +74,38 @@ func NewServer(port int, params *Params) (Server, error) {
 				localPacketList = append(localPacketList, packet)
 				localPacketList = append(localPacketList, readAllPackets(ret.dataIncomingPacket)...)
 				fmt.Println(ret.name + "batch read " + strconv.Itoa(len(localPacketList)) + " packets:dataIncomingPacket")
-				for _, packet = range localPacketList {
-					fmt.Printf("%s received packet:%v\n", ret.name, packet)
-					msg := packet.msg
-					addr := packet.addr
-					if msg.Type == MsgConnect {
-						if _, exist := ret.address2ConnectionId[addr.String()]; !exist {
-							id := ret.nextConnectionId
-							ret.nextConnectionId++
-							ret.address2ConnectionId[addr.String()] = id
-							ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit, ret.name+strconv.Itoa(ret.clientNumber))
-							ret.clientNumber++
-						}
-						id := ret.address2ConnectionId[addr.String()]
-						c := ret.connectIdList[id]
-						c.WriteImpl(nil, MsgAck)
-					} else {
-						c, ok := ret.connectIdList[msg.ConnID]
-						if !ok {
-							//ignore
-							fmt.Printf("ignore packet %v as there's no related worker", packet)
-							continue
-						}
-						c.appendPacket(packet)
-					}
-				}
+				for _, item := range localPacketList {
+					go func(packet *Packet) {
+						fmt.Printf("%s received packet:%v\n", ret.name, packet)
+						msg := packet.msg
+						addr := packet.addr
 
-			case connId := <-ret.cmdGetClient:
-				c, ok := ret.connectIdList[connId]
-				if !ok {
-					ret.dataClient <- nil
+						if msg.Type == MsgConnect {
+							ret.mtx.Lock()
+							if _, exist := ret.address2ConnectionId[addr.String()]; !exist {
+								id := ret.nextConnectionId
+								ret.nextConnectionId++
+								ret.address2ConnectionId[addr.String()] = id
+								ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit, ret.name+strconv.Itoa(ret.clientNumber))
+								ret.clientNumber++
+							}
+							id := ret.address2ConnectionId[addr.String()]
+							c := ret.connectIdList[id]
+							c.WriteImpl(nil, MsgAck)
+							ret.mtx.Unlock()
+						} else {
+							ret.mtx.RLock()
+							c, ok := ret.connectIdList[msg.ConnID]
+							ret.mtx.RUnlock()
+							if !ok {
+								//ignore
+								fmt.Printf("ignore packet %v as there's no related worker", packet)
+								return
+							}
+							c.appendPacket(packet)
+						}
+					}(item)
 				}
-				ret.dataClient <- c
-				//case <-ret.cmdGetMsg:
-				//	ret.reqNewPacket = true
-				//	if len(ret.clientReceivedDataIncomingPacket) > 0 {
-				//		ret.reqNewPacket = false
-				//		//packet := <-ret.clientReceivedDataIncomingPacket
-				//		//ret.dataGetMsg <- packet.msg
-				//	}
-				//	if len(ret.dataGetMsg) > 0 {
-				//		continue
-				//	}
-				//	ret.reqNewPacket = true
-				//ENDGETMSG:
-				//	for len(ret.receivedDataPacket) > 0 {
-				//		ret.reqNewPacket = false
-				//		p := ret.receivedDataPacket[0]
-				//		ret.receivedDataPacket = ret.receivedDataPacket[1:]
-				//		select {
-				//		case ret.dataGetMsg <- p.msg:
-				//		default:
-				//			break ENDGETMSG
-				//		}
-				//
-				//	}
-				//case p := <-ret.clientReceivedDataIncomingPacket:
-				//	localPacketList := []*Packet{p}
-				//	localPacketList = append(localPacketList, readAllPackets(ret.clientReceivedDataIncomingPacket)...)
-				//	fmt.Println("batch read " + strconv.Itoa(len(localPacketList)) + " packets : clientReceivedIncomingPacket")
-				//	for _, p = range localPacketList {
-				//		msg := p.msg
-				//		fmt.Println(ret.name + " " + msg.String() + " message : clientReceivedIncomingPacket")
-				//		if ret.reqNewPacket {
-				//			ret.reqNewPacket = false
-				//			ret.dataGetMsg <- msg
-				//		} else {
-				//			ret.receivedDataPacket = append(ret.receivedDataPacket, p)
-				//		}
-				//	}
 
 			case no := <-ret.clientExit:
 				c, ok := ret.connectIdList[no]
@@ -160,12 +115,6 @@ func NewServer(port int, params *Params) (Server, error) {
 				addr := c.remoteAddress
 				delete(ret.address2ConnectionId, addr.String())
 				delete(ret.connectIdList, no)
-				//default:
-				//	if ret.reqNewPacket && len(ret.clientReceivedDataIncomingPacket) > 0 {
-				//		ret.reqNewPacket = false
-				//		packet := <-ret.clientReceivedDataIncomingPacket
-				//		ret.dataGetMsg <- packet.msg
-				//	}
 			}
 
 		}
@@ -177,7 +126,6 @@ func (s *server) Read() (int, []byte, error) {
 	if s.closing {
 		return 0, nil, errors.New("server closed")
 	}
-	//s.cmdGetMsg <-1
 	p := <-s.clientReceivedDataIncomingPacket
 	msg := p.msg
 	if msg.Type != MsgData {
@@ -194,27 +142,29 @@ func (s *server) Read() (int, []byte, error) {
 	if (len(msg.Payload) == 0) {
 		breakThis = true
 	}
-	fmt.Printf("%s read %v payload len 0:%v\n", s.name, msg, breakThis)
+	fmt.Printf("[read interface]%s read %v payload len 0:%v\n", s.name, msg, breakThis)
 	return msg.ConnID, msg.Payload, nil
 }
 
 func (s *server) Write(connID int, payload []byte) error {
-	s.cmdGetClient <- connID
-	c := <-s.dataClient
-	if c == nil {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+	c, ok := s.connectIdList[connID]
+	if !ok {
 		return errors.New("connection not exists : id :" + strconv.Itoa(connID))
 	}
-	go c.Write(payload)
+	go func() { c.Write(payload) }()
 	return nil
 }
 
 func (s *server) CloseConn(connID int) error {
-	s.cmdGetClient <- connID
-	c := <-s.dataClient
-	if c == nil {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+	c, ok := s.connectIdList[connID]
+	if !ok {
 		return errors.New("connection not exists : id :" + strconv.Itoa(connID))
 	}
-	go c.Close()
+	go func() { c.Close() }()
 	return nil
 }
 

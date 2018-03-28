@@ -7,30 +7,39 @@ import (
 )
 
 type writerWithWindow struct {
-	pendingMessage []*Message
-	needAck        int
-	windowSize     int
-	cmdShutdown    chan CloseCmd
-	newMessage     chan *Message
-	conn           *lspnet.UDPConn
-	remoteAddress  *lspnet.UDPAddr
-	returnChannel  chan error
-	ack            chan int
-	cmdResend      chan int
-	name           string
+	pendingMessage     []*Message
+	needAck            int
+	windowSize         int
+	cmdShutdown        chan CloseCmd
+	newMessage         chan *Message
+	conn               *lspnet.UDPConn
+	remoteAddress      *lspnet.UDPAddr
+	returnChannel      chan error
+	ack                chan int
+	cmdResend          chan int
+	name               string
+	nextSequenceNumber int
+	connectionId       int
 }
 
-func newWriterWithWindow(windowSize int, conn *lspnet.UDPConn, addr *lspnet.UDPAddr, signalExit chan error, name string) *writerWithWindow {
+func newWriterWithWindow(windowSize int,
+	conn *lspnet.UDPConn,
+	addr *lspnet.UDPAddr,
+	signalExit chan error,
+	name string,
+	connectionId int) *writerWithWindow {
 	ret := &writerWithWindow{
-		windowSize:    windowSize,
-		cmdShutdown:   make(chan CloseCmd),
-		newMessage:    make(chan *Message, 1000),
-		conn:          conn,
-		remoteAddress: addr,
-		ack:           make(chan int, 100),
-		cmdResend:     make(chan int, 1),
-		returnChannel: signalExit,
-		name:          name,
+		windowSize:         windowSize,
+		cmdShutdown:        make(chan CloseCmd),
+		newMessage:         make(chan *Message, 1000),
+		conn:               conn,
+		remoteAddress:      addr,
+		ack:                make(chan int, 100),
+		cmdResend:          make(chan int, 1),
+		returnChannel:      signalExit,
+		name:               name,
+		nextSequenceNumber: 1,
+		connectionId:       connectionId,
 	}
 	return ret
 }
@@ -60,7 +69,15 @@ func (www *writerWithWindow) start() {
 					if stop == true {
 						break
 					}
-					if msg.Type != MsgData {
+					msg.ConnID = www.connectionId
+					if msg.Type == MsgAck {
+						go www.writeMessageBlocking(msg)
+						continue
+					}
+					if msg.Type == MsgData {
+						msg.SeqNum = www.nextSequenceNumber
+						www.nextSequenceNumber++
+					} else {
 						fmt.Println("!!!!")
 					}
 					www.pendingMessage = append(www.pendingMessage, msg)
@@ -78,7 +95,7 @@ func (www *writerWithWindow) start() {
 			case <-www.cmdResend:
 				fmt.Println(www.name + " resend start");
 				for i := 0; i < www.needAck; i++ {
-					err := www.writeMessage(www.pendingMessage[i])
+					err := www.writeMessageBlocking(www.pendingMessage[i])
 					if err != nil {
 						cmd := CloseCmd{reason: err.Error()}
 						go func() { www.cmdShutdown <- cmd }()
@@ -88,7 +105,7 @@ func (www *writerWithWindow) start() {
 				fmt.Println(www.name + " resend end");
 			default:
 				for len(www.pendingMessage) > 0 && www.needAck < www.windowSize && www.needAck < len(www.pendingMessage) {
-					err := www.writeMessage(www.pendingMessage[www.needAck])
+					err := www.writeMessageBlocking(www.pendingMessage[www.needAck])
 					if err != nil {
 						str := err.Error() + ": close writer" + www.name
 						fmt.Println(str)
@@ -103,7 +120,8 @@ func (www *writerWithWindow) start() {
 
 	}()
 }
-func (www *writerWithWindow) writeMessage(message *Message) error {
+
+func (www *writerWithWindow) writeMessageBlocking(message *Message) error {
 	bb := encode(message)
 	var err error
 	if www.remoteAddress == nil {
@@ -114,22 +132,24 @@ func (www *writerWithWindow) writeMessage(message *Message) error {
 	fmt.Printf("%s writeMessage called with %v target : %v\n", www.name, message, www.remoteAddress)
 	return err
 }
-func (www *writerWithWindow) add(msg *Message) {
-	if msg.Type == MsgConnect {
-		fmt.Println("!!!!!!!!!!!!!!!!!!!")
-	} else if msg.Type == MsgAck {
-		go func(copyMsg *Message) { www.writeMessage(copyMsg) }(msg)
-	} else {
-		www.newMessage <- msg
-	}
+
+func (www *writerWithWindow) asyncWrite(msg *Message) {
+	//if msg.Type == MsgConnect {
+	//	fmt.Println("!!!!!!!!!!!!!!!!!!!")
+	//} else if msg.Type == MsgAck {
+	//	go func(copyMsg *Message) { www.writeMessage(copyMsg) }(msg)
+	//} else {
+	//	go func() { www.newMessage <- msg }()
+	//}
+	go func() { www.newMessage <- msg }()
 }
 
 func (www *writerWithWindow) getAck(number int) {
-	www.ack <- number
+	go func() { www.ack <- number }()
 }
 
 func (www *writerWithWindow) resend() {
-	www.cmdResend <- 1
+	go func() { www.cmdResend <- 1 }()
 }
 
 func (www *writerWithWindow) close() {

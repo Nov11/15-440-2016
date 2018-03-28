@@ -9,14 +9,12 @@ import (
 	"sync"
 	"time"
 	"strconv"
-	"os"
 )
 
 type client struct {
 	connectionId                int
 	connection                  *lspnet.UDPConn
 	remoteAddress               *lspnet.UDPAddr
-	nextSequenceNumber          int
 	params                      *Params
 	mtx                         sync.Mutex
 	cmdClientClose              chan CloseCmd
@@ -27,7 +25,6 @@ type client struct {
 	writer                      *writerWithWindow
 	closed                      bool
 	closeReason                 string
-	cmdReadNewestMessage        chan int
 	dataNewestMessage           chan *Message
 	previousSeqNumReturnedToApp int
 	signalWriterClosed          chan error
@@ -38,6 +35,7 @@ type client struct {
 	shareSocket                 bool
 	clientExit                  chan int
 	name                        string
+	dataMessageInThisEpoch      int
 }
 
 func (c *client) closeChannels() {
@@ -45,7 +43,6 @@ func (c *client) closeChannels() {
 	close(c.clientHasFullyClosedDown)
 	close(c.dataIncomingPacket)
 	close(c.readTimerReset)
-	close(c.cmdReadNewestMessage)
 	close(c.dataNewestMessage)
 	close(c.signalWriterClosed)
 }
@@ -161,23 +158,22 @@ func (c *client) ConnID() int {
 //at that time there's no routine exists to wait on cmd channel
 //close all cmd channel before
 func (c *client) Read() ([]byte, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Println("cmd channel closed already")
 		}
 	}()
-	c.cmdReadNewestMessage <- 1
 	msg, ok := <-c.dataNewestMessage
 	if ok == true {
 		return msg.Payload, nil
 	}
 	return nil, errors.New(c.closeReason)
 }
+
 func (c *client) Write(payload []byte) error {
 	return c.WriteImpl(payload, MsgData)
 }
+
 func (c *client) WriteImpl(payload []byte, msgType MsgType) error {
 	//fmt.Printf("write called with param %v\n", payload)
 	c.mtx.Lock()
@@ -186,26 +182,18 @@ func (c *client) WriteImpl(payload []byte, msgType MsgType) error {
 	if closed {
 		return errors.New("client is closing. refuse sending new packets")
 	}
-	connId := c.connectionId
 
 	var msg *Message
 	if msgType == MsgAck {
-		msg = NewAck(connId, 0)
+		msg = NewAck(0, 0)
 	} else {
-		seq := c.nextSequenceNumber
-		c.nextSequenceNumber++
-		msg = NewData(connId, seq, len(payload), payload)
+		msg = NewData(0, 0, len(payload), payload)
 	}
-	if msg.Size != len(payload) {
-		os.Exit(1)
-	}
-	c.writer.add(msg)
+	c.writer.asyncWrite(msg)
 	return nil
 }
 
 func (c *client) Close() error {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Println("cmd channel closed already")
@@ -224,21 +212,6 @@ func (c *client) closeConnectionIfOwning() {
 	}
 	//
 }
-
-//func (c *client) writeSocket(addr *lspnet.UDPAddr, sendMsg chan *Message, explicitClose chan bool) {
-//	for {
-//		select {
-//		case msg := <-sendMsg:
-//			bytes := encode(msg)
-//			_, err := c.connection.Write(bytes)
-//			if err != nil {
-//				return
-//			}
-//		case <-explicitClose:
-//			return
-//		}
-//	}
-//}
 
 func protocolConnect(message []byte, conn *lspnet.UDPConn, params *Params, dataIncomingPacket chan *Packet) (int, error) {
 	//repeat several times to send connection message until time out or receive an ack from server
@@ -280,7 +253,6 @@ func createNewClient(connectionId int,
 	name string) *client {
 	ret := &client{
 		connectionId:                connectionId,
-		nextSequenceNumber:          1,
 		params:                      params,
 		remoteAddress:               address,
 		connection:                  conn,
@@ -289,7 +261,6 @@ func createNewClient(connectionId int,
 		clientHasFullyClosedDown:    make(chan error),
 		dataIncomingPacket:          dataIncomingPacket,
 		receiveMessageQueue:         nil,
-		cmdReadNewestMessage:        make(chan int),
 		dataNewestMessage:           make(chan *Message, 1000),
 		previousSeqNumReturnedToApp: 0,
 		signalWriterClosed:          make(chan error, 1),
@@ -298,6 +269,7 @@ func createNewClient(connectionId int,
 		shareSocket:                 shareSocket,
 		clientExit:                  clientExit,
 		name:                        name,
+		dataMessageInThisEpoch:      0,
 	}
 	if dataIncomingPacket == nil {
 		ret.dataIncomingPacket = make(chan *Packet, 1000)
@@ -306,7 +278,12 @@ func createNewClient(connectionId int,
 		ret.signalReaderClosed = make(chan error)
 	}
 	writer :=
-		newWriterWithWindow(params.WindowSize, conn, address, ret.signalWriterClosed, ret.name+"'s www")
+		newWriterWithWindow(params.WindowSize,
+			conn,
+			address,
+			ret.signalWriterClosed,
+			ret.name+"'s www",
+			connectionId)
 	writer.start()
 	ret.writer = writer
 	go func() {
@@ -318,15 +295,15 @@ func createNewClient(connectionId int,
 			if ret.clientExit != nil {
 				ret.clientExit <- ret.connectionId
 			}
-			fmt.Println("!!!!!main loop exited")
+			fmt.Println("!!!!!main loop exited " + ret.name)
 		}()
 		timeOutCntLeft := ret.params.EpochLimit
 		timeOut := time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
-		dataMessageInThisEpoch := 0
-		reqReadMsg := false
+
 		for {
 			select {
 			case cmd := <-ret.cmdClientClose:
+				ret.mtx.Lock()
 				if ret.closed == false {
 					ret.closeReason = cmd.reason
 					ret.closed = true
@@ -335,15 +312,18 @@ func createNewClient(connectionId int,
 						writer.close()
 					} else {
 						ret.closeConnectionIfOwning()
+						ret.mtx.Unlock()
 						return
 					}
 				}
+				ret.mtx.Unlock()
 			case p := <-ret.dataIncomingPacket:
 				var list []*Packet
 				list = append(list, p)
 				list = append(list, readAllPackets(ret.dataIncomingPacket)...)
-				for _, p = range list{
-					receiveMsg := p.msg
+				for _, packet := range list {
+					//go func(packet *Packet) {
+					receiveMsg := packet.msg
 					fmt.Printf(ret.name+"read msg from socket: %v\n", receiveMsg)
 					//validate
 					if !verify(receiveMsg, ret) {
@@ -353,35 +333,40 @@ func createNewClient(connectionId int,
 
 					if receiveMsg.Type == MsgConnect {
 						fmt.Println("received connection message. ignore")
+						continue
 					} else if receiveMsg.Type == MsgAck {
 						writer.getAck(receiveMsg.SeqNum)
-					} else {
-						//update epoch timeout count
-						dataMessageInThisEpoch++
-						//push to receiveMessage queue
-						isNewMsg := ret.appendNewReceivedMessage(receiveMsg)
-						//send ack for this data message
-						ack := NewAck(ret.connectionId, receiveMsg.SeqNum)
-						writer.add(ack)
-						go func(ptrCopy *Packet) {
-							if isNewMsg && ret.dataPacketSideWay != nil{
-								//fmt.Printf("push into server thread : %v\n", ptrCopy)
-								ret.dataPacketSideWay <- ptrCopy
-							}
-						}(p)
+						continue
 					}
 
-					if reqReadMsg == true {
-						nextMsg := ret.getNextMessage()
-						if nextMsg != nil {
-							reqReadMsg = false
-							fmt.Println("returning newest message")
-							ret.dataNewestMessage <- nextMsg
+					//update epoch timeout count
+					ret.dataMessageInThisEpoch++
+					//push to receiveMessage queue
+					isNewMsg := ret.appendNewReceivedMessage(receiveMsg)
+					//send ack for this data message
+					ack := NewAck(ret.connectionId, receiveMsg.SeqNum)
+					writer.asyncWrite(ack)
+					go func(ptrCopy *Packet) {
+						if isNewMsg && ret.dataPacketSideWay != nil {
+							//fmt.Printf("push into server thread : %v\n", ptrCopy)
+							ret.dataPacketSideWay <- ptrCopy
 						}
+					}(packet)
+
+					//if ret.reqReadMsg == true {
+					nextMsg := ret.getNextMessage()
+					if nextMsg != nil {
+						//ret.reqReadMsg = false
+						fmt.Println("returning newest message")
+						ret.dataNewestMessage <- nextMsg
 					}
+					//}
+					//}(p)
 				}
 			case <-timeOut:
-				if dataMessageInThisEpoch != 0 {
+				ret.mtx.Lock()
+				fmt.Println(ret.name + " TIME OUT");
+				if ret.dataMessageInThisEpoch != 0 {
 					timeOutCntLeft = ret.params.EpochLimit
 				} else {
 					timeOutCntLeft--
@@ -395,22 +380,26 @@ func createNewClient(connectionId int,
 					//resend ack <de>of the last received data message</del>
 					zeroAck := NewAck(ret.connectionId, 0)
 					fmt.Println("send keep alive")
-					writer.add(zeroAck)
-					//writer.add()
+					writer.asyncWrite(zeroAck)
+					//writer.asyncWrite()
 				}
 				// if there is msg that hasn't receive ack
 				// resend that packet
 				writer.resend()
 				//reset epoch counters
 				timeOut = time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
-				dataMessageInThisEpoch = 0
+				ret.dataMessageInThisEpoch = 0
+				ret.mtx.Unlock()
 			case err, ok := <-ret.signalWriterClosed:
 				fmt.Println("writer closed")
 				//I never write to this, how can it wake up ?
 				if ok != true {
 
 				}
-				if ret.closed == false {
+				ret.mtx.Lock()
+				closed := ret.closed
+				ret.mtx.Unlock()
+				if closed == false {
 					go func() { ret.cmdClientClose <- CloseCmd{reason: err.Error()} }()
 				} else {
 					ret.closeConnectionIfOwning()
@@ -418,15 +407,6 @@ func createNewClient(connectionId int,
 					<-ret.signalReaderClosed
 					ret.clientHasFullyClosedDown <- err
 					return
-				}
-			case <-ret.cmdReadNewestMessage:
-				fmt.Println(ret.name + "requesting new message")
-				reqReadMsg = true
-				msg := ret.getNextMessage()
-				if msg != nil {
-					reqReadMsg = false
-					fmt.Println("returning newest message")
-					ret.dataNewestMessage <- msg
 				}
 			}
 		}
