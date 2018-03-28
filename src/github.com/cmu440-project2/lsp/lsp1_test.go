@@ -82,7 +82,7 @@ func newTestSystem(t *testing.T, numClients int, params *Params) *testSystem {
 	ts.clients = make([]Client, numClients)
 	for i := range ts.clients {
 		hostport := lspnet.JoinHostPort("localhost", strconv.Itoa(port))
-		ts.clients[i], err = NewClient(hostport, params, "client " + strconv.Itoa(i))
+		ts.clients[i], err = NewClient(hostport, params, "client "+strconv.Itoa(i))
 		if err != nil {
 			t.Fatalf("Client failed to connect to server on port %d: %s.", port, err)
 		}

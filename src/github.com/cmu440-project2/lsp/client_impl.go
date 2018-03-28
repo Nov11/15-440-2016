@@ -271,10 +271,10 @@ func createNewClient(connectionId int,
 		name:                        name,
 		dataMessageInThisEpoch:      0,
 	}
-	if dataIncomingPacket == nil {
+	if ret.dataIncomingPacket == nil {
 		ret.dataIncomingPacket = make(chan *Packet, 1000)
 	}
-	if signalReaderClosed == nil {
+	if ret.signalReaderClosed == nil {
 		ret.signalReaderClosed = make(chan error)
 	}
 	writer :=
@@ -364,7 +364,6 @@ func createNewClient(connectionId int,
 					//}(p)
 				}
 			case <-timeOut:
-				ret.mtx.Lock()
 				fmt.Println(ret.name + " TIME OUT");
 				if ret.dataMessageInThisEpoch != 0 {
 					timeOutCntLeft = ret.params.EpochLimit
@@ -389,7 +388,6 @@ func createNewClient(connectionId int,
 				//reset epoch counters
 				timeOut = time.After(time.Duration(ret.params.EpochMillis) * time.Millisecond)
 				ret.dataMessageInThisEpoch = 0
-				ret.mtx.Unlock()
 			case err, ok := <-ret.signalWriterClosed:
 				fmt.Println("writer closed")
 				//I never write to this, how can it wake up ?
