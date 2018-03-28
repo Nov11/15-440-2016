@@ -11,6 +11,8 @@ import (
 	"os"
 )
 
+var SERVERCHANNELLENGTH int = 5000
+
 type server struct {
 	address                          *lspnet.UDPAddr
 	connection                       *lspnet.UDPConn
@@ -58,8 +60,8 @@ func NewServer(port int, params *Params) (Server, error) {
 		address2ConnectionId:             make(map[string]int),
 		closing:                          false,
 		signalReaderClosed:               make(chan error),
-		dataIncomingPacket:               make(chan *Packet, 1000),
-		clientReceivedDataIncomingPacket: make(chan *Packet, 1000),
+		dataIncomingPacket:               make(chan *Packet, SERVERCHANNELLENGTH),
+		clientReceivedDataIncomingPacket: make(chan *Packet, SERVERCHANNELLENGTH),
 		clientExit:                       make(chan int),
 		name:                             "server",
 	}
@@ -142,7 +144,7 @@ func (s *server) Read() (int, []byte, error) {
 	if (len(msg.Payload) == 0) {
 		breakThis = true
 	}
-	fmt.Printf("[read interface]%s read %v payload len 0:%v\n", s.name, msg, breakThis)
+	fmt.Printf("[read interface]%s read %v payload len 0:%v msg pending:%v\n", s.name, msg, breakThis, len(s.clientReceivedDataIncomingPacket))
 	return msg.ConnID, msg.Payload, nil
 }
 

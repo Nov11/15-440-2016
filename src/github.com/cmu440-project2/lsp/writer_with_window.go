@@ -6,6 +6,7 @@ import (
 	"errors"
 )
 
+var WWWLENGTH int = 2000
 type writerWithWindow struct {
 	pendingMessage     []*Message
 	needAck            int
@@ -31,11 +32,11 @@ func newWriterWithWindow(windowSize int,
 	ret := &writerWithWindow{
 		windowSize:         windowSize,
 		cmdShutdown:        make(chan CloseCmd),
-		newMessage:         make(chan *Message, 1000),
+		newMessage:         make(chan *Message, WWWLENGTH),
 		conn:               conn,
 		remoteAddress:      addr,
-		ack:                make(chan int, 100),
-		cmdResend:          make(chan int, 1),
+		ack:                make(chan int, WWWLENGTH),
+		cmdResend:          make(chan int, WWWLENGTH),
 		returnChannel:      signalExit,
 		name:               name,
 		nextSequenceNumber: 1,

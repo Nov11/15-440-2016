@@ -11,6 +11,8 @@ import (
 	"strconv"
 )
 
+var LENGTH int = 1000
+
 type client struct {
 	connectionId                int
 	connection                  *lspnet.UDPConn
@@ -72,7 +74,7 @@ func NewClient(hostport string, params *Params, name string) (*client, error) {
 	//prepare protocol connection message
 	msg := encode(NewConnect())
 	//fire up read routine
-	dataIncomingPacket := make(chan *Packet, 1000)
+	dataIncomingPacket := make(chan *Packet, LENGTH)
 	signalReaderClosed := make(chan error)
 	go readSocketWithAddress(conn, dataIncomingPacket, signalReaderClosed, name)
 	//send connection message and wait for server's reply
@@ -164,6 +166,7 @@ func (c *client) Read() ([]byte, error) {
 		}
 	}()
 	msg, ok := <-c.dataNewestMessage
+	fmt.Println(c.name + " clientread : pending msg " + strconv.Itoa(len(c.dataNewestMessage)))
 	if ok == true {
 		return msg.Payload, nil
 	}
@@ -261,7 +264,7 @@ func createNewClient(connectionId int,
 		clientHasFullyClosedDown:    make(chan error),
 		dataIncomingPacket:          dataIncomingPacket,
 		receiveMessageQueue:         nil,
-		dataNewestMessage:           make(chan *Message, 1000),
+		dataNewestMessage:           make(chan *Message, 10),
 		previousSeqNumReturnedToApp: 0,
 		signalWriterClosed:          make(chan error, 1),
 		signalReaderClosed:          signalReaderClosed,
@@ -272,7 +275,7 @@ func createNewClient(connectionId int,
 		dataMessageInThisEpoch:      0,
 	}
 	if ret.dataIncomingPacket == nil {
-		ret.dataIncomingPacket = make(chan *Packet, 1000)
+		ret.dataIncomingPacket = make(chan *Packet, LENGTH)
 	}
 	if ret.signalReaderClosed == nil {
 		ret.signalReaderClosed = make(chan error)
@@ -354,11 +357,15 @@ func createNewClient(connectionId int,
 					}(packet)
 
 					//if ret.reqReadMsg == true {
-					nextMsg := ret.getNextMessage()
-					if nextMsg != nil {
-						//ret.reqReadMsg = false
-						fmt.Println("returning newest message")
-						ret.dataNewestMessage <- nextMsg
+					for len(ret.dataNewestMessage) < cap(ret.dataNewestMessage) {
+						nextMsg := ret.getNextMessage()
+						if nextMsg != nil {
+							//ret.reqReadMsg = false
+							fmt.Println("returning newest message")
+							ret.dataNewestMessage <- nextMsg
+						} else {
+							break
+						}
 					}
 					//}
 					//}(p)
