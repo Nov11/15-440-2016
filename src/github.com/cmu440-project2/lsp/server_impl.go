@@ -88,7 +88,7 @@ func NewServer(port int, params *Params) (Server, error) {
 						id := ret.nextConnectionId
 						ret.nextConnectionId++
 						ret.address2ConnectionId[addr.String()] = id
-						ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit, ret.name+strconv.Itoa(ret.clientNumber), nil)
+						ret.connectIdList[id] = createNewClient(id, params, addr, conn, nil, nil, ret.clientReceivedDataIncomingPacket, true, ret.clientExit, ret.name+strconv.Itoa(ret.clientNumber), nil, nil)
 						ret.clientNumber++
 					}
 					id := ret.address2ConnectionId[addr.String()]
@@ -104,12 +104,14 @@ func NewServer(port int, params *Params) (Server, error) {
 						fmt.Printf("ignore packet %v as there's no related worker", packet)
 						return
 					}
+					fmt.Printf("%v before call ing append packet$$$$$ %v\n", c.name, packet)
 					c.appendPacket(packet)
 				}
 				//}(item)
 				//}
 
 			case no := <-ret.clientExit:
+				fmt.Println("closing  client!")
 				c, ok := ret.connectIdList[no]
 				if !ok {
 					fmt.Println("closing unexisted client!")
@@ -172,5 +174,23 @@ func (s *server) CloseConn(connID int) error {
 }
 
 func (s *server) Close() error {
-	return errors.New("not yet implemented")
+	s.mtx.Lock()
+	var wg sync.WaitGroup
+	for _, v := range s.connectIdList {
+		wg.Add(1)
+		go func() {
+			v.Close()
+			wg.Done()
+		}()
+	}
+	s.mtx.Unlock()
+	wg.Wait()
+	s.closeReader()
+	fmt.Println("[server close return]")
+	return nil
+}
+
+func (s *server) closeReader() {
+	s.connection.Close()
+	<-s.signalReaderClosed
 }

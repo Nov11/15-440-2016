@@ -55,14 +55,13 @@ func (www *writerWithWindow) start() {
 		}()
 		stop := false
 		for !stop || len(www.pendingMessage) != 0 {
+			fmt.Printf("%v len(www.pendingMessage): %v stop : %v\n", www.name, www.pendingMessage, stop)
 			select {
 			case cmd := <-www.cmdShutdown:
 				stop = true
 				if cmd.reason != "" {
 					globalError = errors.New(cmd.reason)
 					www.pendingMessage = nil
-				} else {
-					www.windowSize = 99999
 				}
 			case msg := <-www.newMessage:
 				list := []*Message{msg}
@@ -73,7 +72,7 @@ func (www *writerWithWindow) start() {
 					}
 					msg.ConnID = www.connectionId
 					if msg.Type == MsgAck {
-						go www.writeMessageBlocking(msg)
+						www.writeMessageBlocking(msg)
 						continue
 					}
 					if msg.Type == MsgData {
@@ -86,9 +85,15 @@ func (www *writerWithWindow) start() {
 				}
 				www.output()
 			case number := <-www.ack:
+				fmt.Printf("%v ***** %v\n", www.name, number)
 				list := []int{number}
 				list = append(list, readAllInt(www.ack)...)
+				fmt.Printf("%v ***** %v\n", www.name, list)
 				for _, n := range list {
+					if n == 10 {
+
+						fmt.Printf("-----%v ---- %v ----- %v\n", www.name, www.needAck, www.pendingMessage)
+					}
 					for i := 0; i < www.needAck; i++ {
 						if www.pendingMessage[i].SeqNum == n {
 							fmt.Printf(www.name+" message sent %v has been acked\n", www.pendingMessage[i])
@@ -120,7 +125,8 @@ func (www *writerWithWindow) start() {
 
 func (www *writerWithWindow) output() {
 	for len(www.pendingMessage) > 0 && www.needAck < www.windowSize && www.needAck < len(www.pendingMessage) {
-		go func(msg *Message) {
+		//go
+		func(msg *Message) {
 			err := www.writeMessageBlocking(msg)
 			if err != nil {
 				str := err.Error() + ": close writer" + www.name
@@ -162,6 +168,7 @@ func (www *writerWithWindow) seqWrite(msg *Message) {
 }
 
 func (www *writerWithWindow) getAck(number int) {
+	fmt.Printf("%v get ack %v \n", www.name, number)
 	go func() { www.ack <- number }()
 }
 

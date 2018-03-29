@@ -81,3 +81,42 @@ func readSocketWithAddress(conn *lspnet.UDPConn, dataOut chan *Packet, signalRea
 		dataOut <- p
 	}
 }
+
+func readSocketWithRetry(conn *lspnet.UDPConn, dataOut chan *Packet, signalReaderClosed chan error, name string, quit chan int) {
+	var globalError error
+	defer func() {
+		fmt.Println("!!!!! reader exit " + name)
+		signalReaderClosed <- globalError
+	}()
+
+	buffer := make([]byte, 1024)
+	for {
+		select {
+		case <-quit:
+			return
+		default:
+			n, addr, err := conn.ReadFromUDP(buffer)
+			if err != nil {
+				fmt.Println(err.Error())
+				if err != io.EOF {
+					//connection is lost. client should close
+
+				} else {
+					//peer will never send any more messages include lsp' ack
+					//any thing client send will be in vain
+					//client should shutdown itself
+
+				}
+				globalError = errors.New(name + "read from socket returns " + err.Error())
+				fmt.Println(name + "reader encounter :" + globalError.Error())
+				dataOut <- &Packet{msg: &Message{Type: -10}}
+
+				continue
+			}
+			msg := Message{}
+			decode(buffer[:n], &msg)
+			p := &Packet{msg: &msg, addr: addr}
+			dataOut <- p
+		}
+	}
+}

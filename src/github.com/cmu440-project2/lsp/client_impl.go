@@ -40,14 +40,18 @@ type client struct {
 	name                        string
 	dataMessageInThisEpoch      int
 	ackMessageInThisEpoch       int
+	closeReader                 chan int
 }
 
 func (c *client) closeChannels() {
+	fmt.Printf("%v closeChannels\n", c.name)
 	close(c.cmdClientClose)
 	close(c.clientHasFullyClosedDown)
 	close(c.dataIncomingPacket)
 	close(c.readTimerReset)
-	close(c.dataNewestMessage)
+	if c.dataNewestMessage != nil {
+		close(c.dataNewestMessage)
+	}
 	close(c.signalWriterClosed)
 }
 
@@ -78,16 +82,17 @@ func NewClient(hostport string, params *Params, name string) (*client, error) {
 	//fire up read routine
 	dataIncomingPacket := make(chan *Packet, LENGTH)
 	signalReaderClosed := make(chan error)
-	go readSocketWithAddress(conn, dataIncomingPacket, signalReaderClosed, name)
+	quit := make(chan int, 1)
+	go readSocketWithRetry(conn, dataIncomingPacket, signalReaderClosed, name, quit)
 	//send connection message and wait for server's reply
-	id, err := protocolConnect(msg, conn, params, dataIncomingPacket)
+	id, err := protocolConnect(msg, conn, params, dataIncomingPacket, quit)
 	if err != nil {
 		fmt.Println(err.Error())
 		return nil, err
 	}
 
 	fmt.Println("connected to server")
-	ret := createNewClient(id, params, nil, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil, name, make(chan *Message, 10))
+	ret := createNewClient(id, params, nil, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil, name, make(chan *Message, 10), quit)
 	return ret, nil
 }
 
@@ -151,7 +156,7 @@ func (c *client) unGetMessage(msg *Message) {
 
 func verify(msg *Message, c *client) bool {
 	if msg.Type != MsgConnect && msg.Type != MsgData && msg.Type != MsgAck {
-		fmt.Println("msg type incorrecct : " + string(msg.Type))
+		fmt.Println("msg type incorrecct : " + strconv.Itoa(int(msg.Type)))
 		return false
 	}
 
@@ -228,6 +233,7 @@ func (c *client) Close() error {
 	cmd := CloseCmd{reason: ""}
 	c.cmdClientClose <- cmd
 	<-c.clientHasFullyClosedDown
+	fmt.Printf("[%v closed]\n", c.name)
 	return nil
 }
 
@@ -236,15 +242,18 @@ func (c *client) closeConnectionIfOwning() {
 	if !c.shareSocket {
 		c.connection.Close()
 	}
+	if c.closeReader != nil {
+		c.closeReader <- 1
+	}
 	//
 }
 
-func protocolConnect(message []byte, conn *lspnet.UDPConn, params *Params, dataIncomingPacket chan *Packet) (int, error) {
+func protocolConnect(message []byte, conn *lspnet.UDPConn, params *Params, dataIncomingPacket chan *Packet, makeReaderQuit chan int) (int, error) {
 	//repeat several times to send connection message until time out or receive an ack from server
 	//c.connection.WriteToUDP(message, c.remoteAddress)
 	conn.Write(message)
 DONE:
-	for i := 0; i < params.EpochLimit; i++ {
+	for i := 0; i < params.EpochLimit; {
 		timeOut := time.After(time.Duration(params.EpochMillis) * time.Millisecond)
 		select {
 		case <-timeOut:
@@ -252,7 +261,11 @@ DONE:
 			if i+1 == params.EpochLimit {
 				break DONE
 			}
-			conn.Write(message)
+			_, err := conn.Write(message)
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+			i++
 		case p := <-dataIncomingPacket:
 			msg := p.msg
 			if verify(msg, nil) && msg.Type == MsgAck {
@@ -260,7 +273,8 @@ DONE:
 			}
 		}
 	}
-	return 0, errors.New("connection abort : time out : wait server's ack for connection message")
+	makeReaderQuit <- 1
+	return 0, errors.New("[client connect to server failed]connection abort : time out : wait server's ack for connection message")
 }
 
 func (c *client) setupAckToLastReceivedMsg(seqNum int) {
@@ -277,7 +291,8 @@ func createNewClient(connectionId int,
 	shareSocket bool,
 	clientExit chan int,
 	name string,
-	dataNewestMessage chan *Message) *client {
+	dataNewestMessage chan *Message,
+	quit chan int) *client {
 	ret := &client{
 		connectionId:                connectionId,
 		params:                      params,
@@ -298,6 +313,7 @@ func createNewClient(connectionId int,
 		name:                        name,
 		dataMessageInThisEpoch:      0,
 		ackMessageInThisEpoch:       0,
+		closeReader:                 quit,
 	}
 	if ret.dataIncomingPacket == nil {
 		ret.dataIncomingPacket = make(chan *Packet, LENGTH)
@@ -317,8 +333,10 @@ func createNewClient(connectionId int,
 	go func() {
 		defer func() {
 			msg := &Message{Type: -1, Payload: encodeString(&ret.closeReason)}
-			p := &Packet{msg: msg}
-			ret.dataPacketSideWay <- p
+			if ret.dataPacketSideWay != nil{
+				p := &Packet{msg: msg}
+				ret.dataPacketSideWay <- p
+			}
 			ret.closeChannels()
 			if ret.clientExit != nil {
 				ret.clientExit <- ret.connectionId
@@ -340,6 +358,7 @@ func createNewClient(connectionId int,
 						ret.closeReason = "explicit close"
 						writer.close()
 					} else {
+						writer.close()
 						ret.closeConnectionIfOwning()
 						ret.mtx.Unlock()
 						return
@@ -356,7 +375,7 @@ func createNewClient(connectionId int,
 					fmt.Printf(ret.name+" read msg from socket: %v\n", receiveMsg)
 					//validate
 					if !verify(receiveMsg, ret) {
-						fmt.Printf("msg : %v mal formatted", receiveMsg)
+						fmt.Printf("msg : %v mal formatted\n", receiveMsg)
 						continue
 					}
 
@@ -365,6 +384,7 @@ func createNewClient(connectionId int,
 						fmt.Println("received connection message. ignore")
 						continue
 					} else if receiveMsg.Type == MsgAck {
+						fmt.Printf(ret.name+" ACK msg from socket: %v\n", receiveMsg)
 						//update epoch timeout count page7 says 'any kind'
 						ret.ackMessageInThisEpoch++
 						writer.getAck(receiveMsg.SeqNum)
@@ -450,7 +470,9 @@ func createNewClient(connectionId int,
 				} else {
 					ret.closeConnectionIfOwning()
 					fmt.Println("waiting for reader to exit")
-					<-ret.signalReaderClosed
+					if !shareSocket {
+						<-ret.signalReaderClosed
+					}
 					ret.clientHasFullyClosedDown <- err
 					return
 				}
@@ -461,5 +483,7 @@ func createNewClient(connectionId int,
 }
 
 func (c *client) appendPacket(p *Packet) {
+	fmt.Printf("%v call appendPacket with %v\n", c.name, p)
 	c.dataIncomingPacket <- p
+	fmt.Printf("%v call appendPacket with %v return\n ", c.name, p)
 }
