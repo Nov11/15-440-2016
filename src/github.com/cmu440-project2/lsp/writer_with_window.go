@@ -55,7 +55,7 @@ func (www *writerWithWindow) start() {
 		}()
 		stop := false
 		for !stop || len(www.pendingMessage) != 0 || len(www.newMessage) != 0 {
-			fmt.Printf("%v len(www.pendingMessage): %v stop : %v msgleft:%v\n", www.name, www.pendingMessage, stop, len(www.newMessage))
+			//fmt.Printf("%v len(www.pendingMessage): %v stop : %v msgleft:%v\n", www.name, www.pendingMessage, stop, len(www.newMessage))
 			select {
 			case cmd := <-www.cmdShutdown:
 				stop = true
@@ -97,7 +97,7 @@ func (www *writerWithWindow) start() {
 					//}
 					for i := 0; i < www.needAck; i++ {
 						if www.pendingMessage[i].SeqNum == n {
-							fmt.Printf(www.name+" message sent %v has been acked\n", www.pendingMessage[i])
+							//fmt.Printf(www.name+" message sent %v has been acked\n", www.pendingMessage[i])
 							www.pendingMessage = append(www.pendingMessage[:i], www.pendingMessage[i+1:]...)
 							www.needAck--
 							break
@@ -106,7 +106,7 @@ func (www *writerWithWindow) start() {
 				}
 				www.output()
 			case <-www.cmdResend:
-				fmt.Printf("%v resend start: [%v,%v](window index)\n", www.name, 0, www.needAck)
+				//fmt.Printf("%v resend start: [%v,%v](window index)\n", www.name, 0, www.needAck)
 				for i := 0; i < www.needAck; i++ {
 					err := www.writeMessageBlocking(www.pendingMessage[i])
 					if err != nil {
@@ -115,7 +115,7 @@ func (www *writerWithWindow) start() {
 						break
 					}
 				}
-				fmt.Println(www.name + " resend end");
+				//fmt.Println(www.name + " resend end");
 				//default:
 
 			}
@@ -149,7 +149,7 @@ func (www *writerWithWindow) writeMessageBlocking(message *Message) error {
 	} else {
 		_, err = www.conn.WriteToUDP(bb, www.remoteAddress)
 	}
-	fmt.Printf("%s writeMessage called with %v target : %v\n", www.name, message, www.remoteAddress)
+	//fmt.Printf("%s writeMessage called with %v target : %v\n", www.name, message, www.remoteAddress)
 	return err
 }
 
@@ -169,7 +169,7 @@ func (www *writerWithWindow) seqWrite(msg *Message) {
 }
 
 func (www *writerWithWindow) getAck(number int) {
-	fmt.Printf("%v get ack %v \n", www.name, number)
+	//fmt.Printf("%v get ack %v \n", www.name, number)
 	go func() { www.ack <- number }()
 }
 

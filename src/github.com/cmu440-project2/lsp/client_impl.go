@@ -113,22 +113,22 @@ func (c *client) appendNewReceivedMessage(msg *Message) bool {
 	}
 	for i := 0; i < len(c.receiveMessageQueue); i++ {
 		if c.receiveMessageQueue[i].SeqNum == msg.SeqNum {
-			fmt.Println(c.name + " appendNewReceivedMessage ignore duplicate message with same seq num :" + strconv.Itoa(msg.SeqNum))
+			//fmt.Println(c.name + " appendNewReceivedMessage ignore duplicate message with same seq num :" + strconv.Itoa(msg.SeqNum))
 			return false
 		} else if c.receiveMessageQueue[i].SeqNum > msg.SeqNum {
-			fmt.Println(c.name + " appendNewReceivedMessage prepend seq num :" + strconv.Itoa(msg.SeqNum))
+			//fmt.Println(c.name + " appendNewReceivedMessage prepend seq num :" + strconv.Itoa(msg.SeqNum))
 			c.receiveMessageQueue = append(c.receiveMessageQueue[:i], append([]*Message{msg}, c.receiveMessageQueue[i:]...)...)
 			return true
 		}
 	}
-	fmt.Println(c.name + " appendNewReceivedMessage append seq num :" + strconv.Itoa(msg.SeqNum))
+	//fmt.Println(c.name + " appendNewReceivedMessage append seq num :" + strconv.Itoa(msg.SeqNum))
 	c.receiveMessageQueue = append(c.receiveMessageQueue, msg)
 	return true
 }
 
 //return next message if already received that message, or return nil
 func (c *client) getNextMessage() *Message {
-	fmt.Printf("%v getNextMessage : %v previousSeqNumReturnedToApp: %v\n", c.name, c.receiveMessageQueue, c.previousSeqNumReturnedToApp)
+	//fmt.Printf("%v getNextMessage : %v previousSeqNumReturnedToApp: %v\n", c.name, c.receiveMessageQueue, c.previousSeqNumReturnedToApp)
 	if len(c.receiveMessageQueue) == 0 {
 		return nil
 	}
@@ -137,7 +137,6 @@ func (c *client) getNextMessage() *Message {
 			ret := c.receiveMessageQueue[i]
 			c.receiveMessageQueue = c.receiveMessageQueue[i+1:]
 			c.previousSeqNumReturnedToApp++
-			fmt.Printf("%v getNextMessage return : %v \n", c.name, ret)
 
 			return ret
 		}
@@ -147,7 +146,7 @@ func (c *client) getNextMessage() *Message {
 }
 
 func (c *client) unGetMessage(msg *Message) {
-	fmt.Println("!!!!!unget " + msg.String())
+	//fmt.Println("!!!!!unget " + msg.String())
 	if len(c.receiveMessageQueue) > 0 && c.receiveMessageQueue[0].SeqNum <= msg.SeqNum {
 		fmt.Printf("cannot unget a message with seq num:%v  while the first in the front : %v\n", msg.SeqNum, c.receiveMessageQueue[0].SeqNum)
 		os.Exit(153)
@@ -198,7 +197,7 @@ func (c *client) Read() ([]byte, error) {
 		}
 	}()
 	msg, ok := <-c.dataNewestMessage
-	fmt.Printf("%v get newest Message :[%v] ok : [%v]  client read interface method : pending msg: %v\n", c.name, msg, ok, strconv.Itoa(len(c.dataNewestMessage)))
+	//fmt.Printf("%v get newest Message :[%v] ok : [%v]  client read interface method : pending msg: %v\n", c.name, msg, ok, strconv.Itoa(len(c.dataNewestMessage)))
 	if ok == true {
 		return msg.Payload, nil
 	}
@@ -206,7 +205,7 @@ func (c *client) Read() ([]byte, error) {
 }
 
 func (c *client) Write(payload []byte) error {
-	fmt.Printf("%v Write interface call with %v\n", c.name, string(payload))
+	//fmt.Printf("%v Write interface call with %v\n", c.name, string(payload))
 	return c.WriteImpl(payload, MsgData)
 }
 
@@ -230,7 +229,7 @@ func (c *client) WriteImpl(payload []byte, msgType MsgType) error {
 }
 
 func (c *client) Close() error {
-	fmt.Printf("[%v close called]\n", c.name)
+	//fmt.Printf("[%v close called]\n", c.name)
 	var err error
 	defer func() {
 		if r := recover(); r != nil {
@@ -241,7 +240,7 @@ func (c *client) Close() error {
 	cmd := CloseCmd{reason: NORMALCLOSE}
 	c.cmdClientClose <- cmd
 	err = <-c.clientHasFullyClosedDown
-	fmt.Printf("[%v closed]\n", c.name)
+	//fmt.Printf("[%v closed]\n", c.name)
 	return err
 }
 
@@ -390,7 +389,7 @@ func createNewClient(connectionId int,
 				for _, packet := range list {
 					//go func(packet *Packet) {
 					receiveMsg := packet.msg
-					fmt.Printf(ret.name+" read msg from socket: %v\n", receiveMsg)
+					//fmt.Printf(ret.name+" read msg from socket: %v\n", receiveMsg)
 					//validate
 					if !verify(receiveMsg, ret) {
 						fmt.Printf("msg : %v mal formatted\n", receiveMsg)
@@ -402,7 +401,7 @@ func createNewClient(connectionId int,
 						fmt.Println("received connection message. ignore")
 
 					} else if receiveMsg.Type == MsgAck {
-						fmt.Printf(ret.name+" ACK msg from socket: %v\n", receiveMsg)
+						//fmt.Printf(ret.name+" ACK msg from socket: %v\n", receiveMsg)
 						//update epoch timeout count page7 says 'any kind'
 						ret.ackMessageInThisEpoch++
 						writer.getAck(receiveMsg.SeqNum)
@@ -419,14 +418,14 @@ func createNewClient(connectionId int,
 				}
 				ret.enqueueReceivedMsg()
 			case <-timeOut:
-				fmt.Println(ret.name + " TIME OUT")
+				//fmt.Println(ret.name + " TIME OUT")
 				ret.enqueueReceivedMsg()
 				if ret.dataMessageInThisEpoch+ret.ackMessageInThisEpoch != 0 {
 					timeOutCntLeft = ret.params.EpochLimit
 				} else {
 					timeOutCntLeft--
 					if timeOutCntLeft == 0 {
-						fmt.Println(ret.name + " closing : no data message after epoch [limit exceeded] : ")
+						//fmt.Println(ret.name + " closing : no data message after epoch [limit exceeded] : ")
 						cmd := CloseCmd{reason: "no data message received after epoch [limit exceeded]"}
 						go func() {
 							ret.cmdClientClose <- cmd
@@ -436,7 +435,7 @@ func createNewClient(connectionId int,
 				if ret.dataMessageInThisEpoch == 0 {
 					//resend ack <de>of the last received data message</del>
 					zeroAck := NewAck(ret.connectionId, 0)
-					fmt.Println(ret.name + " send keep alive")
+					//fmt.Println(ret.name + " send keep alive")
 					writer.asyncWrite(zeroAck)
 				}
 				// if there is msg that hasn't receive ack
@@ -495,7 +494,7 @@ func (ret *client) enqueueReceivedMsg() {
 		//for pure client
 		for len(ret.dataNewestMessage) < cap(ret.dataNewestMessage) {
 			nextMsg := ret.getNextMessage()
-			fmt.Printf("%v[pure client] get Next message: %v\n", ret.name, nextMsg)
+			//fmt.Printf("%v[pure client] get Next message: %v\n", ret.name, nextMsg)
 			if nextMsg != nil {
 				//ret.reqReadMsg = false
 				ret.dataNewestMessage <- nextMsg
@@ -508,7 +507,7 @@ func (ret *client) enqueueReceivedMsg() {
 	WORKERLOOP:
 		for {
 			nextMsg := ret.getNextMessage()
-			fmt.Printf("%v[worker] get Next message: %v\n", ret.name, nextMsg)
+			//fmt.Printf("%v[worker] get Next message: %v\n", ret.name, nextMsg)
 			if nextMsg == nil {
 				break
 			}

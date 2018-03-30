@@ -78,7 +78,7 @@ func NewServer(port int, params *Params) (Server, error) {
 				//fmt.Println(ret.name + " batch read " + strconv.Itoa(len(localPacketList)) + " packets:dataIncomingPacket")
 				//for _, item := range localPacketList {
 				//	go func(packet *Packet) {
-				fmt.Printf("%s received packet:%v\n", ret.name, packet)
+				//fmt.Printf("%s received packet:%v\n", ret.name, packet)
 				msg := packet.msg
 				addr := packet.addr
 
@@ -101,7 +101,7 @@ func NewServer(port int, params *Params) (Server, error) {
 					ret.mtx.RUnlock()
 					if !ok {
 						//ignore
-						fmt.Printf("ignore packet %v as there's no related worker", packet)
+						//fmt.Printf("ignore packet %v as there's no related worker", packet)
 						return
 					}
 					//fmt.Printf("%v before call ing append packet$$$$$ %v\n", c.name, packet)
@@ -111,7 +111,7 @@ func NewServer(port int, params *Params) (Server, error) {
 				//}
 
 			case no := <-ret.clientExit:
-				fmt.Printf("server closing  ConnId %v\n", no)
+				//fmt.Printf("server closing  ConnId %v\n", no)
 				c, ok := ret.connectIdList[no]
 				if !ok {
 					fmt.Println("closing unexisted client!")
@@ -127,7 +127,7 @@ func NewServer(port int, params *Params) (Server, error) {
 }
 
 func (s *server) Read() (int, []byte, error) {
-	fmt.Println("server [Read] called")
+	//fmt.Println("server [Read] called")
 	if s.closing {
 		return 0, nil, errors.New("server closed")
 	}
@@ -143,11 +143,11 @@ func (s *server) Read() (int, []byte, error) {
 		os.Exit(143)
 	}
 
-	breakThis := false
-	if (len(msg.Payload) == 0) {
-		breakThis = true
-	}
-	fmt.Printf("[read interface]%s read %v payload len 0:%v msg pending:%v\n", s.name, msg, breakThis, len(s.clientReceivedDataIncomingPacket))
+	//breakThis := false
+	//if (len(msg.Payload) == 0) {
+	//	breakThis = true
+	//}
+	//fmt.Printf("[read interface]%s read %v payload len 0:%v msg pending:%v\n", s.name, msg, breakThis, len(s.clientReceivedDataIncomingPacket))
 	return msg.ConnID, msg.Payload, nil
 }
 
@@ -186,12 +186,11 @@ func (s *server) Close() error {
 	s.mtx.Unlock()
 	wg.Wait()
 	s.closeReader()
-	fmt.Printf("[server close return %v]\n", s.name)
+	//fmt.Printf("[server close return %v]\n", s.name)
 	return nil
 }
 
 func (s *server) closeReader() {
-	fmt.Printf("%v close reader [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\n", s.name)
 	s.connection.Close()
 	<-s.signalReaderClosed
 }
