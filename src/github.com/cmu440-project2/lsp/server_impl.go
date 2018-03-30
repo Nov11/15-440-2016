@@ -139,8 +139,8 @@ func (s *server) Read() (int, []byte, error) {
 		return msg.ConnID, nil, errors.New(str)
 	}
 	if msg.Type != MsgData {
-		fmt.Printf("%v\n", msg)
-		os.Exit(1)
+		fmt.Printf("142 %v\n", msg)
+		os.Exit(143)
 	}
 
 	breakThis := false
@@ -178,19 +178,20 @@ func (s *server) Close() error {
 	var wg sync.WaitGroup
 	for _, v := range s.connectIdList {
 		wg.Add(1)
-		go func() {
-			v.Close()
+		go func(c*client) {
+			c.Close()
 			wg.Done()
-		}()
+		}(v)
 	}
 	s.mtx.Unlock()
 	wg.Wait()
 	s.closeReader()
-	fmt.Println("[server close return]")
+	fmt.Printf("[server close return %v]\n", s.name)
 	return nil
 }
 
 func (s *server) closeReader() {
+	fmt.Printf("%v close reader [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\n", s.name)
 	s.connection.Close()
 	<-s.signalReaderClosed
 }
