@@ -13,6 +13,9 @@ import (
 )
 
 var LENGTH int = 1000
+var NORMALCLOSE string = "normal close"
+//var FORCECLOSE string = "force close"
+
 
 type client struct {
 	connectionId                int
@@ -225,16 +228,19 @@ func (c *client) WriteImpl(payload []byte, msgType MsgType) error {
 }
 
 func (c *client) Close() error {
+	fmt.Printf("[%v close called]\n", c.name)
+	var err error
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Println("cmd channel closed already")
+			err = errors.New("already closed")
 		}
 	}()
-	cmd := CloseCmd{reason: ""}
+	cmd := CloseCmd{reason: NORMALCLOSE}
 	c.cmdClientClose <- cmd
-	<-c.clientHasFullyClosedDown
+	err = <-c.clientHasFullyClosedDown
 	fmt.Printf("[%v closed]\n", c.name)
-	return nil
+	return err
 }
 
 func (c *client) closeConnectionIfOwning() {
@@ -246,6 +252,12 @@ func (c *client) closeConnectionIfOwning() {
 		c.closeReader <- 1
 	}
 	//
+}
+
+func (c *client) waitForReaderToQuitIfOwning() {
+	if !c.shareSocket {
+		<-c.signalReaderClosed
+	}
 }
 
 func protocolConnect(message []byte, conn *lspnet.UDPConn, params *Params, dataIncomingPacket chan *Packet, makeReaderQuit chan int) (int, error) {
@@ -287,7 +299,7 @@ func createNewClient(connectionId int,
 	conn *lspnet.UDPConn,
 	dataIncomingPacket chan *Packet,
 	signalReaderClosed chan error,
-	sendDataPacket chan *Packet,
+	dataPacketSideWay chan *Packet,
 	shareSocket bool,
 	clientExit chan int,
 	name string,
@@ -300,14 +312,14 @@ func createNewClient(connectionId int,
 		connection:                  conn,
 		readTimerReset:              make(chan int),
 		cmdClientClose:              make(chan CloseCmd),
-		clientHasFullyClosedDown:    make(chan error),
+		clientHasFullyClosedDown:    make(chan error, 1),
 		dataIncomingPacket:          dataIncomingPacket,
 		receiveMessageQueue:         nil,
 		dataNewestMessage:           dataNewestMessage,
 		previousSeqNumReturnedToApp: 0,
 		signalWriterClosed:          make(chan error, 1),
 		signalReaderClosed:          signalReaderClosed,
-		dataPacketSideWay:           sendDataPacket,
+		dataPacketSideWay:           dataPacketSideWay,
 		shareSocket:                 shareSocket,
 		clientExit:                  clientExit,
 		name:                        name,
@@ -332,8 +344,8 @@ func createNewClient(connectionId int,
 	ret.writer = writer
 	go func() {
 		defer func() {
-			msg := &Message{Type: -1, Payload: encodeString(&ret.closeReason)}
-			if ret.dataPacketSideWay != nil{
+			msg := &Message{Type: -1, ConnID:ret.connectionId ,Payload: encodeString(&ret.closeReason)}
+			if ret.dataPacketSideWay != nil {
 				p := &Packet{msg: msg}
 				ret.dataPacketSideWay <- p
 			}
@@ -349,20 +361,24 @@ func createNewClient(connectionId int,
 		for {
 			select {
 			case cmd := <-ret.cmdClientClose:
-				fmt.Println(ret.name + " close command " + cmd.reason)
+				fmt.Println(ret.name + " received close command : " + cmd.reason)
 				ret.mtx.Lock()
 				if ret.closed == false {
 					ret.closeReason = cmd.reason
 					ret.closed = true
-					if ret.closeReason == "" {
-						ret.closeReason = "explicit close"
+					if cmd.reason == NORMALCLOSE{
 						writer.close()
-					} else {
-						writer.close()
-						ret.closeConnectionIfOwning()
-						ret.mtx.Unlock()
-						return
+					}else{
+						writer.forceClose(cmd.reason)
 					}
+					//if ret.closeReason == "" {
+					//	ret.closeReason = "explicit close"
+					//} else {
+					//	writer.close()
+					//ret.closeConnectionIfOwning()
+					//ret.mtx.Unlock()
+					//return
+					//}
 				}
 				ret.mtx.Unlock()
 			case p := <-ret.dataIncomingPacket:
@@ -462,20 +478,20 @@ func createNewClient(connectionId int,
 				if ok != true {
 
 				}
-				ret.mtx.Lock()
-				closed := ret.closed
-				ret.mtx.Unlock()
-				if closed == false {
-					go func() { ret.cmdClientClose <- CloseCmd{reason: err.Error()} }()
-				} else {
-					ret.closeConnectionIfOwning()
-					fmt.Println("waiting for reader to exit")
-					if !shareSocket {
-						<-ret.signalReaderClosed
-					}
-					ret.clientHasFullyClosedDown <- err
-					return
-				}
+				//ret.mtx.Lock()
+				//closed := ret.closed
+				//ret.mtx.Unlock()
+				//if closed == false {
+				//go func() { ret.cmdClientClose <- CloseCmd{reason: err.Error()} }()
+				//shutdown reader and quit
+				//} else {
+				fmt.Printf("%v waiting for reader to exit\n", ret.name)
+				ret.closeConnectionIfOwning()
+				ret.waitForReaderToQuitIfOwning()
+				fmt.Printf("%v reader has exited\n", ret.name)
+				ret.clientHasFullyClosedDown <- err
+				return
+				//}
 			}
 		}
 	}()
@@ -483,7 +499,7 @@ func createNewClient(connectionId int,
 }
 
 func (c *client) appendPacket(p *Packet) {
-	fmt.Printf("%v call appendPacket with %v\n", c.name, p)
+	//fmt.Printf("%v call appendPacket with %v\n", c.name, p)
 	c.dataIncomingPacket <- p
-	fmt.Printf("%v call appendPacket with %v return\n ", c.name, p)
+	//fmt.Printf("%v call appendPacket with %v return\n ", c.name, p)
 }

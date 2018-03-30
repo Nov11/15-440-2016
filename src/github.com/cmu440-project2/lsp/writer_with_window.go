@@ -85,15 +85,15 @@ func (www *writerWithWindow) start() {
 				}
 				www.output()
 			case number := <-www.ack:
-				fmt.Printf("%v ***** %v\n", www.name, number)
+				//fmt.Printf("%v ***** %v\n", www.name, number)
 				list := []int{number}
 				list = append(list, readAllInt(www.ack)...)
-				fmt.Printf("%v ***** %v\n", www.name, list)
+				//fmt.Printf("%v ***** %v\n", www.name, list)
 				for _, n := range list {
-					if n == 10 {
-
-						fmt.Printf("-----%v ---- %v ----- %v\n", www.name, www.needAck, www.pendingMessage)
-					}
+					//if n == 10 {
+					//
+					//	fmt.Printf("-----%v ---- %v ----- %v\n", www.name, www.needAck, www.pendingMessage)
+					//}
 					for i := 0; i < www.needAck; i++ {
 						if www.pendingMessage[i].SeqNum == n {
 							fmt.Printf(www.name+" message sent %v has been acked\n", www.pendingMessage[i])
@@ -178,5 +178,10 @@ func (www *writerWithWindow) resend() {
 
 func (www *writerWithWindow) close() {
 	cmd := CloseCmd{}
+	www.cmdShutdown <- cmd
+}
+
+func (www *writerWithWindow) forceClose(reason string) {
+	cmd := CloseCmd{reason: reason}
 	www.cmdShutdown <- cmd
 }

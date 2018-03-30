@@ -104,14 +104,14 @@ func NewServer(port int, params *Params) (Server, error) {
 						fmt.Printf("ignore packet %v as there's no related worker", packet)
 						return
 					}
-					fmt.Printf("%v before call ing append packet$$$$$ %v\n", c.name, packet)
+					//fmt.Printf("%v before call ing append packet$$$$$ %v\n", c.name, packet)
 					c.appendPacket(packet)
 				}
 				//}(item)
 				//}
 
 			case no := <-ret.clientExit:
-				fmt.Println("closing  client!")
+				fmt.Printf("server closing  ConnId %v\n", no)
 				c, ok := ret.connectIdList[no]
 				if !ok {
 					fmt.Println("closing unexisted client!")
@@ -133,16 +133,16 @@ func (s *server) Read() (int, []byte, error) {
 	}
 	p := <-s.clientReceivedDataIncomingPacket
 	msg := p.msg
-	if msg.Type != MsgData {
-		fmt.Printf("%v\n", msg)
-		os.Exit(1)
-	}
-
 	if msg.Type == -1 {
 		str := string("")
 		decodeString(msg.Payload, &str)
 		return msg.ConnID, nil, errors.New(str)
 	}
+	if msg.Type != MsgData {
+		fmt.Printf("%v\n", msg)
+		os.Exit(1)
+	}
+
 	breakThis := false
 	if (len(msg.Payload) == 0) {
 		breakThis = true

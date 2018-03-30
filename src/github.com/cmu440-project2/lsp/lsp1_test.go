@@ -222,7 +222,7 @@ func TestBasic1(t *testing.T) {
 	//defer pprof.StopCPUProfile()
 	newTestSystem(t, 1, makeParams(5, 2000, 1)).
 		setDescription("TestBasic1: Short client/server interaction").
-		setNumMsgs(3000).
+		setNumMsgs(300).
 		runTest(2000)
 }
 
