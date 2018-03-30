@@ -54,22 +54,23 @@ func (www *writerWithWindow) start() {
 			www.returnChannel <- globalError
 		}()
 		stop := false
-		for !stop || len(www.pendingMessage) != 0 {
-			fmt.Printf("%v len(www.pendingMessage): %v stop : %v\n", www.name, www.pendingMessage, stop)
+		for !stop || len(www.pendingMessage) != 0 || len(www.newMessage) != 0 {
+			fmt.Printf("%v len(www.pendingMessage): %v stop : %v msgleft:%v\n", www.name, www.pendingMessage, stop, len(www.newMessage))
 			select {
 			case cmd := <-www.cmdShutdown:
 				stop = true
 				if cmd.reason != "" {
 					globalError = errors.New(cmd.reason)
 					www.pendingMessage = nil
+					www.newMessage = nil
 				}
 			case msg := <-www.newMessage:
 				list := []*Message{msg}
 				list = append(list, readAllMsgs(www.newMessage)...)
 				for _, msg = range list {
-					if stop == true {
-						break
-					}
+					//if stop == true {
+					//	break
+					//}
 					msg.ConnID = www.connectionId
 					if msg.Type == MsgAck {
 						www.writeMessageBlocking(msg)

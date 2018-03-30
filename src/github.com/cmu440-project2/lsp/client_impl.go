@@ -100,14 +100,14 @@ func NewClient(hostport string, params *Params, name string) (*client, error) {
 
 //maintain message in seq order. cause application needs message to be read in serial order
 func (c *client) appendNewReceivedMessage(msg *Message) bool {
-	defer func() {
-		num := ""
-		for i := 0; i < len(c.receiveMessageQueue); i++ {
-			num += strconv.Itoa(c.receiveMessageQueue[i].SeqNum)
-			num += " "
-		}
-		fmt.Println(num)
-	}()
+	//defer func() {
+	//	num := ""
+	//	for i := 0; i < len(c.receiveMessageQueue); i++ {
+	//		num += strconv.Itoa(c.receiveMessageQueue[i].SeqNum)
+	//		num += " "
+	//	}
+	//	fmt.Println(num)
+	//}()
 	if msg.SeqNum <= c.previousSeqNumReturnedToApp {
 		return false
 	}
@@ -198,8 +198,7 @@ func (c *client) Read() ([]byte, error) {
 		}
 	}()
 	msg, ok := <-c.dataNewestMessage
-	fmt.Printf("%v get newest Message : %v %v\n", c.name, msg, ok)
-	fmt.Println(c.name + " client read interface method : pending msg " + strconv.Itoa(len(c.dataNewestMessage)))
+	fmt.Printf("%v get newest Message :[%v] ok : [%v]  client read interface method : pending msg: %v\n", c.name, msg, ok, strconv.Itoa(len(c.dataNewestMessage)))
 	if ok == true {
 		return msg.Payload, nil
 	}
