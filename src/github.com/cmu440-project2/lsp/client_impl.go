@@ -16,7 +16,6 @@ var LENGTH int = 1000
 var NORMALCLOSE string = "normal close"
 //var FORCECLOSE string = "force close"
 
-
 type client struct {
 	connectionId                int
 	connection                  *lspnet.UDPConn
@@ -95,7 +94,7 @@ func NewClient(hostport string, params *Params, name string) (*client, error) {
 	}
 
 	fmt.Println("connected to server")
-	ret := createNewClient(id, params, nil, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil, name, make(chan *Message, 10), quit)
+	ret := createNewClient(id, params, nil, conn, dataIncomingPacket, signalReaderClosed, nil, false, nil, name, make(chan *Message, 5), quit)
 	return ret, nil
 }
 
@@ -129,6 +128,7 @@ func (c *client) appendNewReceivedMessage(msg *Message) bool {
 
 //return next message if already received that message, or return nil
 func (c *client) getNextMessage() *Message {
+	fmt.Printf("%v getNextMessage : %v previousSeqNumReturnedToApp: %v\n", c.name, c.receiveMessageQueue, c.previousSeqNumReturnedToApp)
 	if len(c.receiveMessageQueue) == 0 {
 		return nil
 	}
@@ -137,6 +137,8 @@ func (c *client) getNextMessage() *Message {
 			ret := c.receiveMessageQueue[i]
 			c.receiveMessageQueue = c.receiveMessageQueue[i+1:]
 			c.previousSeqNumReturnedToApp++
+			fmt.Printf("%v getNextMessage return : %v \n", c.name, ret)
+
 			return ret
 		}
 	}
@@ -148,10 +150,11 @@ func (c *client) unGetMessage(msg *Message) {
 	fmt.Println("!!!!!unget " + msg.String())
 	if len(c.receiveMessageQueue) > 0 && c.receiveMessageQueue[0].SeqNum <= msg.SeqNum {
 		fmt.Printf("cannot unget a message with seq num:%v  while the first in the front : %v\n", msg.SeqNum, c.receiveMessageQueue[0].SeqNum)
-		os.Exit(1)
+		os.Exit(153)
 	}
 	if msg.SeqNum+1 != c.previousSeqNumReturnedToApp {
 		fmt.Printf("unget msg with unexpected seq num: %v , should be:%v\n", msg.SeqNum, c.previousSeqNumReturnedToApp-1)
+		os.Exit(157)
 	}
 	c.receiveMessageQueue = append([]*Message{msg}, c.receiveMessageQueue...)
 	c.previousSeqNumReturnedToApp--
@@ -344,12 +347,12 @@ func createNewClient(connectionId int,
 	ret.writer = writer
 	go func() {
 		defer func() {
-			msg := &Message{Type: -1, ConnID:ret.connectionId ,Payload: encodeString(&ret.closeReason)}
+			msg := &Message{Type: -1, ConnID: ret.connectionId, Payload: encodeString(&ret.closeReason)}
 			if ret.dataPacketSideWay != nil {
 				p := &Packet{msg: msg}
 				ret.dataPacketSideWay <- p
 			}
-			ret.closeChannels()
+			ret.closeAllChannels()
 			if ret.clientExit != nil {
 				ret.clientExit <- ret.connectionId
 			}
@@ -366,9 +369,9 @@ func createNewClient(connectionId int,
 				if ret.closed == false {
 					ret.closeReason = cmd.reason
 					ret.closed = true
-					if cmd.reason == NORMALCLOSE{
+					if cmd.reason == NORMALCLOSE {
 						writer.close()
-					}else{
+					} else {
 						writer.forceClose(cmd.reason)
 					}
 					//if ret.closeReason == "" {
@@ -398,55 +401,27 @@ func createNewClient(connectionId int,
 					if receiveMsg.Type == MsgConnect {
 						//no one should connect to a client. connection establishment is in server loop, not here.
 						fmt.Println("received connection message. ignore")
-						continue
+
 					} else if receiveMsg.Type == MsgAck {
 						fmt.Printf(ret.name+" ACK msg from socket: %v\n", receiveMsg)
 						//update epoch timeout count page7 says 'any kind'
 						ret.ackMessageInThisEpoch++
 						writer.getAck(receiveMsg.SeqNum)
-						continue
-					}
 
-					//update epoch timeout count
-					ret.dataMessageInThisEpoch++
-					//push to receiveMessage queue
-					ret.appendNewReceivedMessage(receiveMsg)
-					//send ack for this data message
-					ack := NewAck(ret.connectionId, receiveMsg.SeqNum)
-					writer.asyncWrite(ack)
-				}
-
-				if ret.dataNewestMessage != nil && ret.dataPacketSideWay != nil {
-					fmt.Println("cannot be worker and 'client' at same time")
-					os.Exit(1)
-				}
-				//for pure client
-				for len(ret.dataNewestMessage) < cap(ret.dataNewestMessage) {
-					nextMsg := ret.getNextMessage()
-					if nextMsg != nil {
-						//ret.reqReadMsg = false
-						ret.dataNewestMessage <- nextMsg
-					} else {
-						break
+					} else if receiveMsg.Type == MsgData {
+						//update epoch timeout count
+						ret.dataMessageInThisEpoch++
+						//push to receiveMessage queue
+						ret.appendNewReceivedMessage(receiveMsg)
+						//send ack for this data message
+						ack := NewAck(ret.connectionId, receiveMsg.SeqNum)
+						writer.asyncWrite(ack)
 					}
 				}
-				//for worker
-			WORKERLOOP:
-				for {
-					nextMsg := ret.getNextMessage()
-					if nextMsg == nil {
-						break
-					}
-					tmp := &Packet{msg: nextMsg}
-					select {
-					case ret.dataPacketSideWay <- tmp:
-					default:
-						ret.unGetMessage(nextMsg)
-						break WORKERLOOP
-					}
-				}
+				ret.enqueueReceivedMsg()
 			case <-timeOut:
-				fmt.Println(ret.name + " TIME OUT");
+				fmt.Println(ret.name + " TIME OUT")
+				ret.enqueueReceivedMsg()
 				if ret.dataMessageInThisEpoch+ret.ackMessageInThisEpoch != 0 {
 					timeOutCntLeft = ret.params.EpochLimit
 				} else {
@@ -473,7 +448,7 @@ func createNewClient(connectionId int,
 				ret.dataMessageInThisEpoch = 0
 				ret.ackMessageInThisEpoch = 0
 			case err, ok := <-ret.signalWriterClosed:
-				fmt.Println("writer closed")
+				fmt.Println(ret.name + " writer closed")
 				//I never write to this, how can it wake up ?
 				if ok != true {
 
@@ -488,6 +463,14 @@ func createNewClient(connectionId int,
 				fmt.Printf("%v waiting for reader to exit\n", ret.name)
 				ret.closeConnectionIfOwning()
 				ret.waitForReaderToQuitIfOwning()
+				if len(ret.receiveMessageQueue) != 0 {
+					go func() {
+						for v := ret.getNextMessage(); v != nil; v = ret.getNextMessage() {
+							ret.dataNewestMessage <- v
+						}
+						ret.closeAllChannels()
+					}()
+				}
 				fmt.Printf("%v reader has exited\n", ret.name)
 				ret.clientHasFullyClosedDown <- err
 				return
@@ -502,4 +485,47 @@ func (c *client) appendPacket(p *Packet) {
 	//fmt.Printf("%v call appendPacket with %v\n", c.name, p)
 	c.dataIncomingPacket <- p
 	//fmt.Printf("%v call appendPacket with %v return\n ", c.name, p)
+}
+
+func (ret *client) enqueueReceivedMsg() {
+	if ret.dataNewestMessage != nil && ret.dataPacketSideWay != nil {
+		fmt.Println("cannot be worker and 'client' at same time")
+		os.Exit(423)
+	}
+	if ret.dataNewestMessage != nil {
+		//for pure client
+		for len(ret.dataNewestMessage) < cap(ret.dataNewestMessage) {
+			nextMsg := ret.getNextMessage()
+			fmt.Printf("%v[pure client] get Next message: %v\n", ret.name, nextMsg)
+			if nextMsg != nil {
+				//ret.reqReadMsg = false
+				ret.dataNewestMessage <- nextMsg
+			} else {
+				break
+			}
+		}
+	} else {
+		//for worker
+	WORKERLOOP:
+		for {
+			nextMsg := ret.getNextMessage()
+			fmt.Printf("%v[worker] get Next message: %v\n", ret.name, nextMsg)
+			if nextMsg == nil {
+				break
+			}
+			tmp := &Packet{msg: nextMsg}
+			select {
+			case ret.dataPacketSideWay <- tmp:
+			default:
+				ret.unGetMessage(nextMsg)
+				break WORKERLOOP
+			}
+		}
+	}
+}
+
+func (c *client) closeAllChannels() {
+	if len(c.receiveMessageQueue) == 0 {
+		c.closeChannels()
+	}
 }
