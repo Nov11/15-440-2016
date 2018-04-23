@@ -1,11 +1,81 @@
-p1
+p2
 ==
 
-This repository contains the starter code for project 1 (15-440, Fall 2016). It also contains
-the tests that we will use to grade your implementation, and two simple echo server/client
-(`srunner` and `crunner`, respectively) programs that you might find useful for your own testing
-purposes. These instructions assume you have set your `GOPATH` to point to the repository's
-root `p1/` directory.
+This repository contains the starter code for project 2 (15-440, Fall 2016).
+These instructions assume you have set your `GOPATH` to point to the repository's
+root `p2/` directory.
+
+This project was designed for, and tested on AFS cluster machines, though you may choose to
+write and build your code locally as well.
+
+## Starter Code
+
+The starter code for this project is organized roughly as follows:
+
+```
+bin/                               Student-compiled binaries
+
+sols/                              Staff-compiled binaries
+  darwin_amd64/                    Staff-compiled Mac OS X executables
+    crunner                        Staff-compiled TribClient-runner
+    trunner                        Staff-compiled TribServer-runner
+    lrunner                        Staff-compiled Libstore-runner
+    srunner                        Staff-compiled StorageServer-runner
+
+  linux_amd64/                     Staff-compiled Linux executables
+    (see above)
+
+src/github.com/cmu440/tribbler/
+  tribclient/                      TribClient implementation
+  tribserver/                      TODO: implement the TribServer
+  libstore/                        TODO: implement the Libstore
+  storageserver/                   TODO: implement the StorageServer
+  tribbler_<group_name>.pdf        TODO: submit final report
+
+  util/                            Util functions
+    keyFormatter.go                Format the key posted to storage server
+
+  tests/                           Source code for official tests
+    proxycounter/                  Utility package used by the official tests
+    tribtest/                      Tests the TribServer
+    libtest/                       Tests the Libstore
+    storagetest/                   Tests the StorageServer
+    stresstest/                    Tests everything
+  
+  rpc/
+    tribrpc/                       TribServer RPC helpers/constants
+    librpc/                        Libstore RPC helpers/constants
+    storagerpc/                    StorageServer RPC helpers/constants
+    
+tests/                             Shell scripts to run the tests
+```
+
+## Instructions
+
+### Compiling your code
+
+To and compile your code, execute one or more of the following commands (the
+resulting binaries will be located in the `$GOPATH/bin` directory):
+
+```bash
+go install github.com/cmu440/tribbler/runners/srunner
+go install github.com/cmu440/tribbler/runners/lrunner
+go install github.com/cmu440/tribbler/runners/trunner
+go install github.com/cmu440/tribbler/runners/crunner
+```
+
+To simply check that your code compiles (i.e. without creating the binaries),
+you can use the `go build` subcommand to compile an individual package as shown below:
+
+```bash
+# Build/compile the "tribserver" package.
+go build path/to/tribserver
+
+# A different way to build/compile the "tribserver" package.
+go build github.com/cmu440/tribbler/tribserver
+```
+
+##### How to Write Go Code
 
 If at any point you have any trouble with building, installing, or testing your code, the article
 titled [How to Write Go Code](http://golang.org/doc/code.html) is a great resource for understanding
@@ -13,194 +83,152 @@ how Go workspaces are built and organized. You might also find the documentation
 [`go` command](http://golang.org/cmd/go/) to be helpful. As always, feel free to post your questions
 on Piazza.
 
-This project was designed for, and tested on AFS cluster machines, though you may choose to
-write and build your code locally as well.
+### Running your code
 
-## Part A
+To run and test the individual components that make up the Tribbler system, we have provided
+four simple programs that aim to simplify the process. The programs are located in the
+`p2/src/github.com/cmu440/tribbler/runners/` directory and may be executed from anywhere on your system.
+Each program is discussed individually below:
 
-### Testing your code using `srunner` & `crunner`
+##### The `srunner` program
 
-To make testing your server a bit easier we have provided two simple echo server/client
-programs called `srunner` and `crunner`. If you look at the source code for the two programs,
-you’ll notice that they import the `github.com/cmu440/lsp` package (in other words, they compile
-against the current state of your LSP implementation). We believe you will find these programs
-useful in the early stages of development when your client and server implementations are
-largely incomplete.
-
-To compile, build, and run these programs, use the `go run` command from inside the directory
-storing the file (these instructions assume your `GOPATH` is pointing to the project’s root
-`p1/` directory):
+The `srunner` (`StorageServer`-runner) program creates and runs an instance of your
+`StorageServer` implementation. Some example usage is provided below:
 
 ```bash
-go run srunner.go
+# Start a single master storage server on port 9009.
+./srunner -port=9009
+
+# Start the master on port 9009 and run two additional slaves.
+./srunner -port=9009 -N=3
+./srunner -port=9010 -master="localhost:9009"
+./srunner -port=9011 -master="localhost:9009"
 ```
 
-The `srunner` and `crunner` programs may be customized using command line flags. For more
-information, specify the `-h` flag at the command line. For example,
+Note that in the above example you do not need to specify a port for your slave storage servers.
+For additional usage instructions, please execute `./srunner -help` or consult the `srunner.go` source code.   
+
+##### The `lrunner` program
+
+The `lrunner` (`Libstore`-runner) program creates and runs an instance of your `Libstore`
+implementation. It enables you to execute `Libstore` methods from the command line, as shown
+in the example below:
 
 ```bash
-$ go run srunner.go -h
-Usage of bin/srunner:
-  -elim=5: epoch limit
-  -ems=2000: epoch duration (ms)
-  -port=9999: port number
-  -rdrop=0: network read drop percent
-  -v=false: show srunner logs
-  -wdrop=0: network write drop percent
-  -wsize=1: window size
+# Create one (or more) storage servers in the background.
+./srunner -port=9009 &
+
+# Execute Put("thom", "yorke")
+./lrunner -port=9009 p thom yorke  
+OK                                 
+
+# Execute Get("thom")
+./lrunner -port=9009 g thom 
+yorke
+
+# Execute Get("jonny")
+./lrunner -port=9009 g jonny
+ERROR: Get operation failed with status KeyNotFound
 ```
 
-We have also provided pre-compiled executables for you to use called `srunner-sols` and `crunner-sols`.
-These binaries were compiled against our reference LSP implementation,
-so you might find them useful in the early stages of the development process (for example, if you wanted to test your
-`Client` implementation but haven’t finished implementing the `Server` yet, etc.).Two separate binaries
-are provided for Linux and Mac OS X machines (Windows is not supported at this time).
+Note that the exact error messages that are output by the `lrunner` program may differ
+depending on how your `Libstore` implementation. For additional usage instructions, please
+execute `./lrunner -help` or consult the `lrunner.go` source code.
 
-As an example, to start an echo server on port `6060` on an AFS cluster machine, execute the following command:
+##### The `trunner` program
 
-```sh
-$GOPATH/bin/linux_amd64/srunner-sols -port=6060
+The `trunner` (`TribServer`-runner) program creates and runs an instance of your
+`TribServer` implementation. For usage instructions, please execute `./trunner -help` or consult the
+`trunner.go` source code. In order to use this program for your own personal testing,
+you're `Libstore` implementation must function properly and one or more storage servers
+(i.e. `srunner` programs) must be running in the background.
+   
+##### The `crunner` program
+
+The `crunner` (`TribClient`-runner) program creates and runs an instance of the
+`TribClient` implementation we have provided as part of the starter code.
+For usage instructions, please execute `./crunner -help` or consult the
+`crunner.go` source code. As with the above programs, you'll need to start one or
+more Tribbler servers and storage servers beforehand so that the `TribClient`
+will have someone to communicate with.
+
+##### Staff-compiled binaries
+
+Last but not least, we have also provided pre-compiled binaries (i.e. they were compiled against our own 
+reference solutions) for each of the programs discussed above.
+The binaries are located in the `p2/sols/` directory and have been compiled against both 64-bit Mac OS X
+and Linux machines. Similar to the staff-compled binaries we provided in project 1,
+we hope these will help you test the individual components of your Tribbler system.
+
+### Executing the official tests
+
+#### 1. Checkpoint
+The tests for checkpoint are provided as bash shell scripts in the `p2/tests_cp` directory.
+The scripts may be run from anywhere on your system (assuming your `GOPATH` has been set and
+they are being executed on a 64-bit Mac OS X or Linux machine). For example, to run the
+`libtest.sh` test, simply execute the following:
+
+```bash
+$GOPATH/tests_cp/libtest.sh
 ```
 
-### Running the tests
+Note that these bash scripts link against both your own implementations as well as the test
+code located in the `p2/src/github.com/cmu440/tribbler/tests_cp/` directory. What's more, a few of these tests
+will also run against the staff-solution binaries discussed above,
+thus enabling us to test the correctness of individual components of your system
+as opposed to your entire Tribbler system as a whole.
 
-To test your submission, we will execute the following command from inside the
-`p1/src/github.com/cmu440/lsp` directory for each of the tests (where `TestName` is the
-name of one of the 44 test cases, such as `TestBasic6` or `TestWindow1`):
+#### 2. Full test
 
-```sh
-go test -run=TestName
+The tests for the whole project are provided as bash shell scripts in the `p2/tests` directory.
+The scripts may be run from anywhere on your system (assuming your `GOPATH` has been set and
+they are being executed on a 64-bit Mac OS X or Linux machine). For example, to run the
+`libtest.sh` test, simply execute the following:
+
+```bash
+$GOPATH/tests/libtest.sh
 ```
 
-Note that we will execute each test _individually_ using the `-run` flag and by specify a regular expression
-identifying the name of the test to run. To ensure that previous tests don’t affect the outcome of later tests,
-we recommend executing the tests individually (or in small batches, such as `go test -run=TestBasic` which will
-execute all tests beginning with `TestBasic`) as opposed to all together using `go test`.
+Note that these bash scripts link against both your own implementations as well as the test
+code located in the `p2/src/github.com/cmu440/tribbler/tests/` directory. Similarly, a few of these tests
+will also run against the staff-solution binaries discussed above,
+thus enabling us to test the correctness of individual components of your system
+as opposed to your entire Tribbler system as a whole.
 
-On some tests, we will also check your code for race conditions using Go’s race detector:
-
-```sh
-go test -race -run=TestName
-```
+If you and your partner are still confused about the behavior of the testing scripts (even
+after you've analyzed its source code), please don't hesitate to ask us a question on Piazza!
 
 ### Submitting to Autolab
 
-As with project 0, we will be using Autolab to grade your submissions for this project.
-We will run some&mdash;but not all&mdash;of the tests with the race detector enabled.
-
-To submit your code to Autolab, create a `lsp.tar` file containing your LSP implementation as follows:
+To submit your code to Autolab, create a `tribbler.tar` file containing your implementation as follows:
 
 ```sh
-cd p1/src/github.com/cmu440/
-tar -cvf lsp.tar lsp/
-```
-
-## Part B
-
-### Importing the `bitcoin` package
-
-In order to use the starter code we provide in the `hash.go` and `message.go` files, use the
-following `import` statement:
-
-```go
-import "github.com/cmu440/bitcoin"
-```
-
-Once you do this, you should be able to make use of the `bitcoin` package as follows:
-
-```go
-hash := bitcoin.Hash("thom yorke", 19970521)
-
-msg := bitcoin.NewRequest("jonny greenwood", 200, 71010)
-```
-
-### Compiling the `client`, `miner` & `server` programs
-
-To compile the `client`, `miner`, and `server` programs, use the `go install` command
-as follows (these instructions assume your
-`GOPATH` is pointing to the project's root `p1/` directory):
-
-```bash
-# Compile the client, miner, and server programs. The resulting binaries
-# will be located in the $GOPATH/bin directory.
-go install github.com/cmu440/bitcoin/client
-go install github.com/cmu440/bitcoin/miner
-go install github.com/cmu440/bitcoin/server
-
-# Start the server, specifying the port to listen on.
-$GOPATH/bin/server 6060
-
-# Start a miner, specifying the server's host:port.
-$GOPATH/bin/miner localhost:6060
-
-# Start the client, specifying the server's host:port, the message
-# "bradfitz", and max nonce 9999.
-$GOPATH/bin/client localhost:6060 bradfitz 9999
-```
-
-Note that you will need to use the `os.Args` variable in your code to access the user-specified command line arguments.
-
-### Running the tests
-
-Unlike in previous projects, the tests for part B will _not_ be open source. Instead, we have
-provided two binaries&mdash;`ctest` and `mtest`&mdash;for you to use to test your code. On Autolab, we will be testing you using these two binaries along with an additional `stest` binary.
-
-To execute the tests, make sure your `GOPATH` is properly set and then execute them as follows (note
-that you for each binary, you can activate verbose-mode by specifying the `-v` flag). _Make sure you
-compile your `client`, `miner`, and `server` programs using `go install` before running the tests!_
-
-```bash
-# Run ctest on a Linux machine in non-verbose mode.
-$GOPATH/src/github.com/cmu440/bitcoin/tests/ctest
-```
-
-When you run the tests, one of the first things you'll probably notice is that none of the logs
-you print in both the code you write for part A and part B will not appear. This is because
-our test binaries must capture the output of your programs in order to test that your request clients
-print the correct result message to standard output at the end of each test. An alternative to
-logging messages to standard output is to use a `log.Logger` and direct them to a file instead, as
-illustrated by the code below:
-
-```go
-const (
-    name = "log.txt"
-    flag = os.O_RDWR | os.O_CREATE
-    perm = os.FileMode(0666)
-)
-
-file, err := os.OpenFile(name, flag, perm)
-if err != nil {
-    return
-}
-
-LOGF := log.New(file, "", log.Lshortfile|log.Lmicroseconds)
-LOGF.Println("Bees?!", "Beads.", "Gob's not on board.")
-```
-
-Don't forget to call `file.Close()` when you are done using it!
-
-### Submitting to Autolab
-
-To submit your code to Autolab, create a `cmu440.tar` file containing your part A and part B implementation
-as follows:
-
-```sh
-cd p1/src/github.com/
-tar -cvf cmu440.tar cmu440/
+cd $GOPATH/src/github.com/cmu440
+tar -cvf tribbler.tar tribbler/
 ```
 
 ## Miscellaneous
 
-### Reading the API Documentation
+### Reading the starter code documentation
 
 Before you begin the project, you should read and understand all of the starter code we provide.
-To make this experience a little less traumatic (we know, it's a lot :P),
-fire up a web server and read the documentation in a browser by executing the following command:
+To make this experience a little less traumatic, fire up a web server and read the
+documentation in a browser by executing the following command:
 
 ```sh
 godoc -http=:6060 &
 ```
 
-Then, navigate to [localhost:6060/pkg/github.com/cmu440](http://localhost:6060/pkg/github.com/cmu440) in a browser.
-Note that you can execute this command from anywhere in your system (assuming your `GOPATH`
-is pointing to the project's root `p1/` directory).
+Then, navigate to [localhost:6060/pkg/github.com/cmu440/tribbler](http://localhost:6060/pkg/github.com/cmu440/tribbler)
+in a browser (note that you can execute this command from anywhere in your system, assuming your `GOPATH`
+is set correctly).
+
+### Using Go on AFS
+
+For those students who wish to write their Go code on AFS (either in a cluster or remotely), you will
+need to set the `GOROOT` environment variable as follows (this is required because Go is installed
+in a custom location on AFS machines):
+
+```bash
+export GOROOT=/usr/local/depot/go
+```

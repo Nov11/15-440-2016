@@ -1,19 +1,84 @@
+// Implementation of an echo client based on LSP.
+
 package main
 
 import (
+	"flag"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"strconv"
+
+	"github.com/cmu440-project2/lsp"
+	"github.com/cmu440-project2/lspnet"
 )
 
-const (
-	defaultHost = "localhost"
-	defaultPort = 9999
+var (
+	port        = flag.Int("port", 9999, "server port number")
+	host        = flag.String("host", "localhost", "server host address")
+	readDrop    = flag.Int("rdrop", 0, "network read drop percent")
+	writeDrop   = flag.Int("wdrop", 0, "network write drop percent")
+	epochLimit  = flag.Int("elim", lsp.DefaultEpochLimit, "epoch limit")
+	epochMillis = flag.Int("ems", lsp.DefaultEpochMillis, "epoch duration (ms)")
+	windowSize  = flag.Int("wsize", lsp.DefaultWindowSize, "window size")
+	showLogs    = flag.Bool("v", false, "show crunner logs")
 )
 
-// To test your server implementation, you might find it helpful to implement a
-// simple 'client runner' program. The program could be very simple, as long as
-// it is able to connect with and send messages to your server and is able to
-// read and print out the server's response to standard output. Whether or
-// not you add any code to this file will not affect your grade.
+func init() {
+	// Display time, file, and line number in log messages.
+	log.SetFlags(log.Lmicroseconds | log.Lshortfile)
+}
+
 func main() {
-	fmt.Println("Not implemented.")
+	flag.Parse()
+	if !*showLogs {
+		log.SetOutput(ioutil.Discard)
+	} else {
+		lspnet.EnableDebugLogs(true)
+	}
+	lspnet.SetClientReadDropPercent(*readDrop)
+	lspnet.SetClientWriteDropPercent(*writeDrop)
+	params := &lsp.Params{
+		EpochLimit:  *epochLimit,
+		EpochMillis: *epochMillis,
+		WindowSize:  *windowSize,
+	}
+	hostport := lspnet.JoinHostPort(*host, strconv.Itoa(*port))
+	fmt.Printf("Connecting to server at '%s'...\n", hostport)
+	cli, err := lsp.NewClient(hostport, params)
+	if err != nil {
+		fmt.Printf("Failed to connect to server at %s: %s\n", hostport, err)
+		return
+	}
+	runClient(cli)
+}
+
+func runClient(cli lsp.Client) {
+	defer fmt.Println("Exiting...")
+
+	for cnt := 1; cnt < 1000; cnt++ {
+		// Get next token from input.
+		fmt.Println("Client: " + strconv.Itoa(cnt))
+		var s string
+		s = strconv.Itoa(cnt)
+		cnt++
+		//if _, err := fmt.Scan(&s); err != nil {
+		//	return
+		//}
+		// Send message to server.
+		if err := cli.Write([]byte(s)); err != nil {
+			fmt.Printf("Client %d failed to write to server: %s\n", cli.ConnID(), err)
+			return
+		}
+		log.Printf("Client %d wrote '%s' to server\n", cli.ConnID(), s)
+		// Read message from server.
+		payload, err := cli.Read()
+		if err != nil {
+			fmt.Printf("Client %d failed to read from server: %s\n", cli.ConnID(), err)
+			return
+		}
+		fmt.Printf("Server: %s\n", string(payload))
+	}
+	cli.Close()
+	fmt.Println("client fully closed")
 }
