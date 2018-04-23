@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-
 	"github.com/cmu440-project2/lsp"
+	"github.com/cmu440-project2/bitcoin"
 )
 
 func main() {
@@ -22,7 +22,7 @@ func main() {
 		return
 	}
 
-	client, err := lsp.NewClient(hostport, lsp.NewParams())
+	client, err := lsp.NewClient(hostport, lsp.NewParams(), "client ~~")
 	if err != nil {
 		fmt.Println("Failed to connect to server:", err)
 		return
@@ -32,9 +32,22 @@ func main() {
 
 	_ = message  // Keep compiler happy. Please remove!
 	_ = maxNonce // Keep compiler happy. Please remove!
-	// TODO: implement this!
+	request := bitcoin.NewRequest(message, 0, maxNonce)
+	//1.write request to server
 
-	printResult(0, 0)
+	err = client.Write(bitcoin.Encode(request))
+	bitcoin.CheckError(err)
+	//2.read response from server
+	b, err := client.Read()
+	if err != nil {
+		fmt.Println(err)
+		printDisconnected()
+	}else{
+		msg := bitcoin.Message{}
+		bitcoin.Decode(b, &msg)
+		printResult(msg.Hash, msg.Nonce)
+	}
+
 }
 
 // printResult prints the final result to stdout.
