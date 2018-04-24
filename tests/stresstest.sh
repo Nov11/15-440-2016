@@ -16,17 +16,17 @@ fi
 
 
 # Build student binaries. Exit immediately if there was a compile-time error.
-go install github.com/cmu440/tribbler/runners/trunner
+go install github.com/cmu440-project2/tribbler/runners/trunner
 if [ $? -ne 0 ]; then
    echo "FAIL: code does not compile"
    exit $?
 fi
-go install github.com/cmu440/tribbler/runners/srunner
+go install github.com/cmu440-project2/tribbler/runners/srunner
 if [ $? -ne 0 ]; then
    echo "FAIL: code does not compile"
    exit $?
 fi
-go install github.com/cmu440/tribbler/tests/stresstest
+go install github.com/cmu440-project2/tribbler/tests/stresstest
 if [ $? -ne 0 ]; then
    echo "FAIL: code does not compile"
    exit $?

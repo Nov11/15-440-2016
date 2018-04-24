@@ -16,7 +16,7 @@ fi
 
 # Build the test binary to use to test the student's tribble server implementation.
 # Exit immediately if there was a compile-time error.
-go install github.com/cmu440/tribbler/tests_cp/tribtest
+go install github.com/cmu440-project2/tribbler/tests_cp/tribtest
 if [ $? -ne 0 ]; then
    echo "FAIL: code does not compile"
    exit $?

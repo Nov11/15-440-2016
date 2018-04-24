@@ -3,7 +3,7 @@
 
 package tribclient
 
-import "github.com/cmu440/tribbler/rpc/tribrpc"
+import "github.com/cmu440-project2/tribbler/rpc/tribrpc"
 
 // TribClient defines the set of methods for one possible Tribbler
 // client implementation.

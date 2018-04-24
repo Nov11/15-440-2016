@@ -9,7 +9,7 @@ import (
 	"net/rpc"
 	"strconv"
 
-	"github.com/cmu440/tribbler/rpc/tribrpc"
+	"github.com/cmu440-project2/tribbler/rpc/tribrpc"
 )
 
 // The TribClient uses an 'rpc.Client' in order to perform RPCs to the

@@ -16,7 +16,7 @@ fi
 
 # Build the lrunner binary to use to test the student's libstore implementation.
 # Exit immediately if there was a compile-time error.
-go install github.com/cmu440/tribbler/runners/lrunner
+go install github.com/cmu440-project2/tribbler/runners/lrunner
 if [ $? -ne 0 ]; then
    echo "FAIL: code does not compile"
    exit $?

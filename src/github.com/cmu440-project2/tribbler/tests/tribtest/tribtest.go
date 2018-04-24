@@ -12,10 +12,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cmu440/tribbler/rpc/storagerpc"
-	"github.com/cmu440/tribbler/rpc/tribrpc"
-	"github.com/cmu440/tribbler/tests/proxycounter"
-	"github.com/cmu440/tribbler/tribserver"
+	"github.com/cmu440-project2/tribbler/rpc/storagerpc"
+	"github.com/cmu440-project2/tribbler/rpc/tribrpc"
+	"github.com/cmu440-project2/tribbler/tests/proxycounter"
+	"github.com/cmu440-project2/tribbler/tribserver"
 )
 
 type testFunc struct {

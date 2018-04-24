@@ -16,7 +16,7 @@ fi
 
 # Build the student's storage server implementation.
 # Exit immediately if there was a compile-time error.
-go install github.com/cmu440/tribbler/runners/srunner
+go install github.com/cmu440-project2/tribbler/runners/srunner
 if [ $? -ne 0 ]; then
    echo "FAIL: code does not compile"
    exit $?
@@ -24,7 +24,7 @@ fi
 
 # Build the test binary to use to test the student's storage server implementation.
 # Exit immediately if there was a compile-time error.
-go install github.com/cmu440/tribbler/tests/storagetest
+go install github.com/cmu440-project2/tribbler/tests/storagetest
 if [ $? -ne 0 ]; then
    echo "FAIL: code does not compile"
    exit $?

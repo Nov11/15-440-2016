@@ -6,7 +6,7 @@ import (
 	"hash/fnv"
 	"strings"
 
-	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"github.com/cmu440-project2/tribbler/rpc/storagerpc"
 )
 
 // LeaseMode is a debugging flag that determines how the Libstore should

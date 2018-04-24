@@ -3,7 +3,7 @@ package storageserver
 import (
 	"errors"
 
-	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"github.com/cmu440-project2/tribbler/rpc/storagerpc"
 )
 
 type storageServer struct {

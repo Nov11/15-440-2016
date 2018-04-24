@@ -11,9 +11,9 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/cmu440/tribbler/libstore"
-	"github.com/cmu440/tribbler/rpc/storagerpc"
-	"github.com/cmu440/tribbler/tests/proxycounter"
+	"github.com/cmu440-project2/tribbler/libstore"
+	"github.com/cmu440-project2/tribbler/rpc/storagerpc"
+	"github.com/cmu440-project2/tribbler/tests/proxycounter"
 )
 
 type testFunc struct {

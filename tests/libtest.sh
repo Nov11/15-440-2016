@@ -16,7 +16,7 @@ fi
 
 # Build the test binary to use to test the student's libstore implementation.
 # Exit immediately if there was a compile-time error.
-go install github.com/cmu440/tribbler/tests/libtest
+go install github.com/cmu440-project2/tribbler/tests/libtest
 if [ $? -ne 0 ]; then
    echo "FAIL: code does not compile"
    exit $?
